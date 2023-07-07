@@ -88,14 +88,18 @@ Network::findPortsMatching(const Cell *cell,
             PortMemberIterator *member_iter = memberIterator(port);
             while (member_iter->hasNext()) {
               Port *port_bit = member_iter->next();
-              matches.push_back(port_bit);
+              if (port_bit != nullptr) {
+                matches.push_back(port_bit);
+              }
             }
             delete member_iter;
           }
           else {
             // bus[0]
             Port *port_bit = findBusBit(port, from);
-            matches.push_back(port_bit);
+            if (port_bit != nullptr) {
+              matches.push_back(port_bit);
+            }
           }
         }
       }
