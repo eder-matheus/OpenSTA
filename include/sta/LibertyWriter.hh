@@ -35,4 +35,8 @@ writeLiberty(LibertyLibrary *lib,
              const char *filename,
              StaState *sta);
 
+void
+filterLiberty(const char* filename,
+              StaState *sta);
+
 } // namespace

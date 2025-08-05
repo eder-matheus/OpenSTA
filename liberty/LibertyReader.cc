@@ -29,6 +29,7 @@
 #include <functional>
 #include <string>
 #include <string_view>
+#include <sstream>
 
 #include "ContainerHelpers.hh"
 #include "Format.hh"
@@ -52,6 +53,8 @@
 #include "PortDirection.hh"
 #include "ParseBus.hh"
 #include "Network.hh"
+#include "LibertyScanner.hh"
+#include "LibertyParser.hh"
 
 extern int LibertyParse_debug;
 
@@ -3702,5 +3705,141 @@ OutputWaveform::releaseCurrents()
 {
   return currents_.release();
 }
+
+//////////////////////////////////////////////////
+
+class FilterLibertyGroupVisitor : public LibertyGroupVisitor
+{
+public:
+  virtual void begin(LibertyGroup *group);
+  virtual void end(LibertyGroup *group);
+  virtual void visitAttr(LibertyAttr *attr);
+  virtual void visitVariable(LibertyVariable *variable);
+  virtual bool save(LibertyGroup *) {return true;}
+  virtual bool save(LibertyAttr *) {return true;}
+  virtual bool save(LibertyVariable *) {return true;}
+
+private:
+  std::string indent() const { return std::string(depth_, ' '); }
+  std::string asString(LibertyAttrValue* value);
+  std::string asString(LibertyAttr *attr);
+
+  LibertyGroup *skip_group_{nullptr};
+  int depth_ = 0;
+};
+
+void FilterLibertyGroupVisitor::begin(LibertyGroup *group)
+{
+  if (skip_group_) {
+    depth_ += 2;
+    return;
+  }
+
+  if (strcmp(group->type(), "normalized_driver_waveform") == 0 ||
+      strncmp(group->type(), "output_current", 14) == 0 ||
+      strncmp(group->type(), "ocv", 3) == 0 ||
+      strncmp(group->type(), "output_ccb", 10) == 0 ||
+      strncmp(group->type(), "input_ccb", 9) == 0 ||
+      strncmp(group->type(), "receiver_capacitance", 20) == 0) {
+    skip_group_ = group;
+    depth_ += 2;
+    return;
+  }
+
+  const char* name1 = group->firstName();
+  const char* name2 = group->secondName();
+  std::string name;
+  if (name1) {
+    name += name1;
+  }
+  if (name2) {
+    name += ',';
+    name += name2;
+  }
+
+  printf("%s%s (%s) {\n", indent().c_str(), group->type(), name.c_str());
+  depth_ += 2;
+}
+
+void FilterLibertyGroupVisitor::end(LibertyGroup *group)
+{
+  depth_ -= 2;
+  if (skip_group_) {
+    if (skip_group_ == group) {
+      skip_group_ = nullptr;
+    }
+    return;
+  }
+  printf("%s}\n", indent().c_str());
+}
+
+std::string FilterLibertyGroupVisitor::asString(LibertyAttrValue* value)
+{
+  std::ostringstream s;
+  if (value->isFloat()) {
+    s << value->floatValue();
+  } else if (value->isString()) {
+    s << '"' << value->stringValue() << '"';
+  } else {
+    printf("Unknown value\n");
+    exit(1);
+  }
+  return s.str();
+}
+
+std::string FilterLibertyGroupVisitor::asString(LibertyAttr *attr)
+{
+  std::ostringstream s;
+  s << indent();
+  if (attr->isSimple()) {
+    auto sattr = static_cast<LibertySimpleAttr*>(attr);
+    s << sattr->name() << " : " << asString(sattr->firstValue())
+      << ";";
+  } else if (attr->isComplex()) {
+    auto cattr = static_cast<LibertyComplexAttr*>(attr);
+    bool first = true;
+    s << cattr->name() << " (";
+    for (auto value : *cattr->values()) {
+      if (!first) {
+        s << ", ";
+      }
+      s << asString(value);
+      first = false;
+    }
+    s << ");";
+  } else {
+    printf("ERROR not simple or complex\n");
+    exit(1);
+  }
+  return s.str();
+}
+
+void FilterLibertyGroupVisitor::visitAttr(LibertyAttr *attr)
+{
+  if (!skip_group_) {
+    printf("%s\n", asString(attr).c_str());
+  }
+}
+
+void FilterLibertyGroupVisitor::visitVariable(LibertyVariable */*variable*/)
+{
+}
+
+void
+filterLiberty(const char* filename, StaState *sta)
+{
+  FilterLibertyGroupVisitor library_visitor;
+  auto report = sta->report();
+  gzstream::igzstream stream(filename);
+  if (stream.is_open()) {
+    LibertyParser reader(filename, &library_visitor, report);
+    LibertyScanner scanner(&stream, filename, &reader, report);
+    LibertyParse parser(&scanner, &reader);
+    parser.parse();
+  }
+  else
+    throw FileNotReadable(filename);
+}
+
 
 } // namespace
