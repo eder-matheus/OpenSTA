@@ -50,6 +50,15 @@ proc write_liberty { args } {
   write_liberty_cmd $library $filename
 }
 
+define_cmd_args "write_liberty_binary" {in_filename out_filename}
+
+proc write_liberty_binary { args } {
+  check_argc_eq2 "write_liberty_binary" $args
+  set in_filename [file nativename [lindex $args 0]]
+  set out_filename [file nativename [lindex $args 1]]
+  write_liberty_binary_cmd $in_filename $out_filename
+}
+
 ################################################################
 
 define_cmd_args "report_lib_cell" {cell_name [> filename] [>> filename]}

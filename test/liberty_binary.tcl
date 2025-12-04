@@ -1,0 +1,2 @@
+write_liberty_binary liberty_float_as_str.lib test.blib
+read_liberty test.blib

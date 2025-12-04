@@ -54,6 +54,7 @@ typedef Vector<LibertyAttrValue*> LibertyAttrValueSeq;
 typedef Map<std::string, float> LibertyVariableMap;
 typedef Map<std::string, LibertyGroupVisitor*>LibertyGroupVisitorMap;
 typedef LibertyAttrValueSeq::Iterator LibertyAttrValueIterator;
+typedef Vector<LibertyVariable*> LibertyVariableSeq;
 typedef Vector<LibertyGroup*> LibertyGroupSeq;
 
 enum class LibertyAttrType { attr_string, attr_int, attr_double,
@@ -149,6 +150,7 @@ protected:
   LibertyAttrMap *attr_map_;
   LibertyGroupSeq *subgroups_;
   LibertyDefineMap *define_map_;
+  LibertyVariableSeq *variables_;
 };
 
 class LibertySubgroupIterator : public LibertyGroupSeq::Iterator
@@ -315,4 +317,10 @@ void
 parseLibertyFile(const char *filename,
 		 LibertyGroupVisitor *library_visitor,
 		 Report *report);
+
+void
+parseLibertyFile(std::istream *stream,
+                 const char *filename,
+                 LibertyGroupVisitor *library_visitor,
+                 Report *report);
 } // namespace

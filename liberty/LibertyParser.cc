@@ -40,18 +40,27 @@ using std::string;
 
 void
 parseLibertyFile(const char *filename,
-		 LibertyGroupVisitor *library_visitor,
-		 Report *report)
+                 LibertyGroupVisitor *library_visitor,
+                 Report *report)
 {
   gzstream::igzstream stream(filename);
   if (stream.is_open()) {
-    LibertyParser reader(filename, library_visitor, report);
-    LibertyScanner scanner(&stream, filename, &reader, report);
-    LibertyParse parser(&scanner, &reader);
-    parser.parse();
+    parseLibertyFile(&stream, filename, library_visitor, report);
   }
   else
     throw FileNotReadable(filename);
+}
+
+void
+parseLibertyFile(std::istream *stream,
+                 const char *filename,
+                 LibertyGroupVisitor *library_visitor,
+                 Report *report)
+{
+  LibertyParser reader(filename, library_visitor, report);
+  LibertyScanner scanner(stream, filename, &reader, report);
+  LibertyParse parser(&scanner, &reader);
+  parser.parse();
 }
 
 LibertyParser::LibertyParser(const char *filename,
@@ -260,7 +269,8 @@ LibertyGroup::LibertyGroup(const char *type,
   attrs_(nullptr),
   attr_map_(nullptr),
   subgroups_(nullptr),
-  define_map_(nullptr)
+  define_map_(nullptr),
+  variables_(nullptr)
 {
 }
 
@@ -296,6 +306,14 @@ LibertyGroup::addAttribute(LibertyAttr *attr)
     (*attr_map_)[attr->name()] = attr;
 }
 
+void
+LibertyGroup::addVariable(LibertyVariable *var)
+{
+  if (variables_ == nullptr)
+    variables_ = new LibertyVariableSeq;
+  variables_->push_back(var);
+}
+
 LibertyGroup::~LibertyGroup()
 {
   if (params_) {
@@ -315,6 +333,10 @@ LibertyGroup::~LibertyGroup()
   if (define_map_) {
     define_map_->deleteContents();
     delete define_map_;
+  }
+  if (variables_) {
+    variables_->deleteContents();
+    delete variables_;
   }
 }
 

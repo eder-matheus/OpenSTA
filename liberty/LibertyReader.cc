@@ -23,6 +23,7 @@
 // This notice may not be removed or altered from any source distribution.
 
 #include "LibertyReader.hh"
+#include "LibertyBinaryReader.hh"
 
 #include <cctype>
 #include <cstdlib>
@@ -67,6 +68,16 @@ readLibertyFile(const char *filename,
 		Network *network)
 {
   LibertyReader reader(filename, infer_latches, network);
+  const char *ext = strrchr(filename, '.');
+  if (ext && strcmp(ext, ".blib") == 0) {
+    std::ifstream stream(filename, std::ios::binary);
+    if (stream) {
+      LibertyBinaryReader bin_reader(&reader, network->report());
+      if (bin_reader.read(&stream))
+        return reader.library();
+    }
+    return nullptr;
+  }
   return reader.readLibertyFile(filename);
 }
 
