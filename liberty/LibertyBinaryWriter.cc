@@ -22,6 +22,8 @@
 
 #include <cstring>
 #include <cstdint>
+#include <cstdlib>
+#include <vector>
 
 namespace sta {
 
@@ -35,15 +37,33 @@ writeLibertyBinary(std::istream *in_stream,
   out_stream->write(LIBERTY_BINARY_MAGIC, 8);
   uint32_t version = 1;
   out_stream->write(reinterpret_cast<const char*>(&version), sizeof(version));
+  uint64_t string_table_offset = 0;
+  uint64_t string_table_offset_location = out_stream->tellp();
+  out_stream->write(reinterpret_cast<const char*>(&string_table_offset), sizeof(string_table_offset));
 
   parseLibertyFile(in_stream, "stream", &writer, report);
   
   // Write EOF tag
   uint8_t eof_tag = static_cast<uint8_t>(LibertyBinaryTag::EOF_TAG);
   out_stream->write(reinterpret_cast<const char*>(&eof_tag), sizeof(eof_tag));
+  string_table_offset = out_stream->tellp();
+  out_stream->seekp(string_table_offset_location, out_stream->beg);
+  out_stream->write(reinterpret_cast<const char*>(&string_table_offset), sizeof(string_table_offset));
+
+  // go back to end of file
+  out_stream->seekp(0, out_stream->end);
+  // Write string table
+  uint64_t string_table_size = writer.string_table().size();
+  out_stream->write(reinterpret_cast<const char*>(&string_table_size), sizeof(string_table_size));
+  for (const auto &entry : writer.string_table()) {
+    uint64_t string_length = entry.first.size();
+    out_stream->write(reinterpret_cast<const char*>(&string_length), sizeof(string_length));
+    out_stream->write(entry.first.c_str(), entry.first.size());
+    out_stream->write(reinterpret_cast<const char*>(&entry.second), sizeof(entry.second));
+  } 
 }
 
-LibertyBinaryWriter::LibertyBinaryWriter(std::ostream *stream) : // Changed FILE* to std::ostream*
+LibertyBinaryWriter::LibertyBinaryWriter(std::ostream *stream) :
   stream_(stream)
 {
 }
@@ -96,8 +116,43 @@ LibertyBinaryWriter::visitAttr(LibertyAttr *attr)
     stream_->write(reinterpret_cast<const char*>(&count), sizeof(count));
     
     if (values) {
+      // Optimization: Check if all values are strings that can be converted to floats
+      bool all_floats = true;
+      std::vector<LibertyFloatAttrValue> float_values;
+      float_values.reserve(count);
+
       for (LibertyAttrValue *val : *values) {
-        writeValue(val);
+        if (val->isString()) {
+          std::cout << "String value: " << val->stringValue() << std::endl;
+          char *end;
+          const char *str = val->stringValue();
+          float f = strtof(str, &end);
+          if (*str != '\0' && *end == '\0') {
+            float_values.push_back(LibertyFloatAttrValue(f));
+          }
+          else {
+            all_floats = false;
+            break;
+          }
+        }
+        else if (val->isFloat()) {
+          float_values.push_back(LibertyFloatAttrValue(val->floatValue()));
+        }
+        else {
+          all_floats = false;
+          break;
+        }
+      }
+
+      if (all_floats) {
+        for (LibertyFloatAttrValue &f : float_values) {
+          writeValue(&f);
+        }
+      }
+      else {
+        for (LibertyAttrValue *val : *values) {
+          writeValue(val);
+        }
       }
     }
   }
@@ -141,10 +196,15 @@ LibertyBinaryWriter::writeString(const char *str)
   uint8_t type = static_cast<uint8_t>(LibertyBinaryValueType::STRING);
   stream_->write(reinterpret_cast<const char*>(&type), sizeof(type));
   
-  uint32_t len = str ? strlen(str) : 0;
-  stream_->write(reinterpret_cast<const char*>(&len), sizeof(len));
-  if (len > 0)
-    stream_->write(str, len);
+  if (string_table_.find(str) != string_table_.end()) {
+    uint64_t offset = string_table_[str];
+    stream_->write(reinterpret_cast<const char*>(&offset), sizeof(offset));
+    return;
+  } else {
+    uint64_t offset = string_table_.size();
+    string_table_[str] = offset;
+    stream_->write(reinterpret_cast<const char*>(&offset), sizeof(offset));
+  }
 }
 
 void

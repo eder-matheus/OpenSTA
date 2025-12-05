@@ -41,6 +41,7 @@ private:
   void readVariable(LibertyGroup *parent);
   
   // Helpers
+  void readStringTable();
   std::string readString();
   float readFloat();
   int readInt();
@@ -52,6 +53,7 @@ private:
   Report *report_;
   std::istream *stream_;
   std::vector<LibertyStmt*> stmts_; // To manage memory of created stmts if not saved
+  std::vector<std::string> string_table_;
 };
 
 } // namespace

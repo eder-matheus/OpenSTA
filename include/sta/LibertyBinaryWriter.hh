@@ -21,6 +21,7 @@
 #include "liberty/LibertyParser.hh"
 
 #include <iostream>
+#include <unordered_map>
 
 namespace sta {
 
@@ -39,6 +40,7 @@ public:
   virtual bool save(LibertyGroup *group);
   virtual bool save(LibertyAttr *attr);
   virtual bool save(LibertyVariable *variable);
+  std::unordered_map<std::string, std::uint64_t>& string_table() { return string_table_; }
 
 private:
   void writeTag(std::uint8_t tag);
@@ -49,6 +51,7 @@ private:
   void writeValue(LibertyAttrValue *value);
 
   std::ostream *stream_;
+  std::unordered_map<std::string, std::uint64_t> string_table_;
 };
 
 void

@@ -44,6 +44,16 @@ LibertyBinaryReader::read(std::istream *stream)
   if (!stream_->good()) return false;
   // Check version compatibility if needed
 
+  std::uint64_t string_table_offset;
+  stream_->read(reinterpret_cast<char*>(&string_table_offset), sizeof(string_table_offset));
+  if (!stream_->good()) return false;
+
+  std::streampos body_start = stream_->tellg();
+  stream_->seekg(string_table_offset);
+  readStringTable();
+  stream_->seekg(body_start);
+
+
   while (true) {
     std::uint8_t tag_val;
     stream_->read(reinterpret_cast<char*>(&tag_val), sizeof(tag_val));
@@ -161,18 +171,58 @@ LibertyBinaryReader::readString()
   std::uint8_t type;
   stream_->read(reinterpret_cast<char*>(&type), sizeof(type));
   if (!stream_->good()) return "";
-  // Check type?
   
-  std::uint32_t len;
-  stream_->read(reinterpret_cast<char*>(&len), sizeof(len));
+  if (static_cast<LibertyBinaryValueType>(type) != LibertyBinaryValueType::STRING) {
+    // Should not happen if format is correct
+    return "";
+  }
+  
+  std::uint64_t index;
+  stream_->read(reinterpret_cast<char*>(&index), sizeof(index));
   if (!stream_->good()) return "";
   
-  if (len == 0) return "";
+  if (index >= string_table_.size()) return "";
+  return string_table_[index];
+}
+
+void
+LibertyBinaryReader::readStringTable()
+{
+  std::uint64_t size;
+  stream_->read(reinterpret_cast<char*>(&size), sizeof(size));
+  if (!stream_->good()) return;
   
-  std::string str(len, '\0');
-  stream_->read(&str[0], len);
-  if (!stream_->good()) return "";
-  return str;
+  string_table_.resize(size);
+  for (std::uint64_t i = 0; i < size; i++) {
+    std::uint64_t len;
+    stream_->read(reinterpret_cast<char*>(&len), sizeof(len));
+    
+    std::string str(len, '\0');
+    stream_->read(&str[0], len);
+    
+    std::uint64_t index; // The writer writes the value (offset/index) but we just need to fill our vector in order?
+    // Wait, the writer writes:
+    // out_stream->write(reinterpret_cast<const char*>(&string_length), sizeof(string_length));
+    // out_stream->write(entry.first.c_str(), entry.first.size());
+    // out_stream->write(reinterpret_cast<const char*>(&entry.second), sizeof(entry.second));
+    // entry.second is the offset/index.
+    // Since we iterate the map, the order is not guaranteed to be 0, 1, 2... 
+    // BUT the writer assigns offsets sequentially: string_table_[str] = offset; offset = string_table_.size();
+    // So the indices ARE 0, 1, 2... but the iteration order of unordered_map is random.
+    // So we MUST read the index and place it at that index.
+    
+    stream_->read(reinterpret_cast<char*>(&index), sizeof(index));
+    
+    if (index >= string_table_.size()) {
+      // This shouldn't happen if size is correct and indices are dense
+      // But if unordered_map iteration is weird, maybe?
+      // Actually indices are 0 to size-1.
+      // So we should be safe if we resize to size.
+    }
+    if (index < string_table_.size()) {
+      string_table_[index] = str;
+    }
+  }
 }
 
 float

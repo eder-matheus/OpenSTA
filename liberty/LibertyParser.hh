@@ -226,7 +226,9 @@ public:
   virtual ~LibertyAttrValue() {}
   virtual bool isString() = 0;
   virtual bool isFloat() = 0;
+  virtual bool isFloatSeq() = 0;
   virtual float floatValue() = 0;
+  virtual FloatSeq* floatValues() = 0;
   virtual const char *stringValue() = 0;
 };
 
@@ -237,7 +239,9 @@ public:
   virtual ~LibertyStringAttrValue() {}
   virtual bool isFloat() { return false; }
   virtual bool isString() { return true; }
+  virtual bool isFloatSeq() { return false; }
   virtual float floatValue();
+  virtual FloatSeq* floatValues() { return nullptr; }
   virtual const char *stringValue();
 
 private:
@@ -251,11 +255,29 @@ public:
   virtual ~LibertyFloatAttrValue() {}
   virtual bool isString() { return false; }
   virtual bool isFloat() { return true; }
+  virtual bool isFloatSeq() { return false; }
   virtual float floatValue();
+  virtual FloatSeq* floatValues() { return nullptr; }
   virtual const char *stringValue();
 
 private:
   float value_;
+};
+
+class LibertyFloatSeqAttrValue : public LibertyAttrValue
+{
+public:
+  LibertyFloatSeqAttrValue(FloatSeq* values);
+  virtual ~LibertyFloatSeqAttrValue() {}
+  virtual bool isString() { return false; }
+  virtual bool isFloat() { return false; }
+  virtual bool isFloatSeq() { return true; }
+  virtual float floatValue();
+  virtual FloatSeq* floatValues() { return values_; }
+  virtual const char *stringValue();
+
+private:
+  FloatSeq* values_;
 };
 
 // Define statements define new simple attributes.

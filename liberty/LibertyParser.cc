@@ -481,6 +481,17 @@ LibertyFloatAttrValue::stringValue()
   return nullptr;
 }
 
+LibertyFloatSeqAttrValue::LibertyFloatSeqAttrValue(FloatSeq* values) :
+  LibertyAttrValue(),
+  values_(values)
+{
+}
+
+LibertyFloatSeqAttrValue::~LibertyFloatSeqAttrValue()
+{
+  delete values_;
+}
+
 ////////////////////////////////////////////////////////////////
 
 LibertyDefine::LibertyDefine(const char *name,
