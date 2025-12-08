@@ -60,7 +60,7 @@ LibertyBinaryReader::read(std::istream *stream)
     if (!stream_->good()) break;
     LibertyBinaryTag tag = static_cast<LibertyBinaryTag>(tag_val);
     
-    if (tag == LibertyBinaryTag::EOF_TAG) break;
+    if (tag == LibertyBinaryTag::EOF_TAG) return true;
     else if (tag == LibertyBinaryTag::GROUP_BEGIN) readGroup(nullptr);
     else if (tag == LibertyBinaryTag::ATTR_SIMPLE) readSimpleAttr(nullptr);
     else if (tag == LibertyBinaryTag::ATTR_COMPLEX) readComplexAttr(nullptr);
@@ -137,6 +137,7 @@ LibertyBinaryReader::readComplexAttr(LibertyGroup *parent)
   std::uint32_t count = readUInt32();
   
   LibertyAttrValueSeq *values = new LibertyAttrValueSeq;
+  values->reserve(count);
   for (std::uint32_t i = 0; i < count; i++) {
     values->push_back(readValue());
   }
@@ -177,9 +178,8 @@ LibertyBinaryReader::readString()
     return "";
   }
   
-  std::uint64_t index;
+  std::uint32_t index;
   stream_->read(reinterpret_cast<char*>(&index), sizeof(index));
-  if (!stream_->good()) return "";
   
   if (index >= string_table_.size()) return "";
   return string_table_[index];
@@ -188,19 +188,20 @@ LibertyBinaryReader::readString()
 void
 LibertyBinaryReader::readStringTable()
 {
-  std::uint64_t size;
+  std::uint32_t size;
   stream_->read(reinterpret_cast<char*>(&size), sizeof(size));
   if (!stream_->good()) return;
   
   string_table_.resize(size);
-  for (std::uint64_t i = 0; i < size; i++) {
-    std::uint64_t len;
+  std::cout << "Reading string table of size " << size << std::endl;
+  for (std::uint32_t i = 0; i < size; i++) {
+    std::uint32_t len;
     stream_->read(reinterpret_cast<char*>(&len), sizeof(len));
     
     std::string str(len, '\0');
     stream_->read(&str[0], len);
     
-    std::uint64_t index; // The writer writes the value (offset/index) but we just need to fill our vector in order?
+    std::uint32_t index; // The writer writes the value (offset/index) but we just need to fill our vector in order?
     // Wait, the writer writes:
     // out_stream->write(reinterpret_cast<const char*>(&string_length), sizeof(string_length));
     // out_stream->write(entry.first.c_str(), entry.first.size());
@@ -268,11 +269,9 @@ LibertyAttrValue *
 LibertyBinaryReader::readValue()
 {
   std::uint8_t type;
-  stream_->read(reinterpret_cast<char*>(&type), sizeof(type));
+  type = stream_->peek();
   if (!stream_->good()) return nullptr;
-  
-  stream_->putback(static_cast<char>(type));
-  
+    
   LibertyBinaryValueType val_type = static_cast<LibertyBinaryValueType>(type);
   if (val_type == LibertyBinaryValueType::STRING) {
     return new LibertyStringAttrValue(readString().c_str());
@@ -286,6 +285,14 @@ LibertyBinaryReader::readValue()
   else if (val_type == LibertyBinaryValueType::BOOLEAN) {
     bool b = readBool();
     return new LibertyStringAttrValue(b ? "true" : "false");
+  }
+  else if (val_type == LibertyBinaryValueType::FLOAT_SEQ) {
+    stream_->read(reinterpret_cast<char*>(&type), sizeof(type));
+    std::uint32_t count = readUInt32();
+    FloatSeq *floats = new FloatSeq;
+    floats->resize(count);
+    stream_->read(reinterpret_cast<char*>(floats->data()), count * sizeof(float));
+    return new LibertyFloatSeqAttrValue(floats);
   }
   
   return nullptr;

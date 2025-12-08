@@ -37,7 +37,8 @@ enum class LibertyBinaryValueType : uint8_t {
   STRING = 1,
   FLOAT = 2,
   INT = 3,
-  BOOLEAN = 4
+  BOOLEAN = 4,
+  FLOAT_SEQ = 5
 };
 
 } // namespace sta

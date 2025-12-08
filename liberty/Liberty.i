@@ -140,12 +140,11 @@ void write_liberty_binary_cmd(const char *in_filename, const char *out_filename)
     throw FileNotReadable(in_filename);
   }
   std::ofstream out_stream(out_filename, std::ios::binary);
-  if (out_stream) {
-    writeLibertyBinary(&in_stream, &out_stream, Sta::sta()->report());
-  }
-  else {
+
+  if (!out_stream) {
     throw FileNotWritable(out_filename);
   }
+  writeLibertyBinary(&in_stream, &out_stream, Sta::sta()->report());
 }
 
 void

@@ -40,7 +40,7 @@ public:
   virtual bool save(LibertyGroup *group);
   virtual bool save(LibertyAttr *attr);
   virtual bool save(LibertyVariable *variable);
-  std::unordered_map<std::string, std::uint64_t>& string_table() { return string_table_; }
+  std::unordered_map<std::string, std::uint32_t>& string_table() { return string_table_; }
 
 private:
   void writeTag(std::uint8_t tag);
@@ -49,9 +49,10 @@ private:
   void writeInt(int val);
   void writeBool(bool val);
   void writeValue(LibertyAttrValue *value);
+  void writeFloatSeq(const std::vector<float> &floats);
 
   std::ostream *stream_;
-  std::unordered_map<std::string, std::uint64_t> string_table_;
+  std::unordered_map<std::string, std::uint32_t> string_table_;
 };
 
 void

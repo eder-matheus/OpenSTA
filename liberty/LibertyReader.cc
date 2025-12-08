@@ -1560,8 +1560,9 @@ LibertyReader::visitIndex(int index,
         float prev = (*axis_values)[0];
         for (size_t i = 1; i < axis_values->size(); i++) {
           float value = (*axis_values)[i];
-          if (value <= prev)
+          if (value <= prev) {
             libWarn(1178, attr, "non-increasing table index values.");
+          }
           prev = value;
         }
       }
@@ -4775,7 +4776,13 @@ LibertyReader::makeFloatTable(LibertyAttr *attr,
     FloatSeq *row = new FloatSeq;
     row->reserve(cols);
     table->push_back(row);
-    if (value->isString()) {
+    if (value->isFloatSeq()) {
+      FloatSeq *floats = value->floatValues();
+      row->reserve(floats->size());
+      for (float f : *floats)
+	row->push_back(f * scale);
+    }
+    else if (value->isString()) {
       const char *values_list = value->stringValue();
       parseStringFloatList(values_list, scale, row, attr);
     }
@@ -5151,7 +5158,12 @@ LibertyReader::readFloatSeq(LibertyAttr *attr,
     LibertyAttrValueIterator value_iter(attr->values());
     if (value_iter.hasNext()) {
       LibertyAttrValue *value = value_iter.next();
-      if (value->isString()) {
+      if (value->isFloatSeq()) {
+	values = new FloatSeq;
+        values->assign(value->floatValues()->begin(), value->floatValues()->end());
+	scaleFloats(values, scale);
+      }
+      else if (value->isString()) {
 	values = new FloatSeq;
 	parseStringFloatList(value->stringValue(), scale, values, attr);
       }
@@ -5167,7 +5179,12 @@ LibertyReader::readFloatSeq(LibertyAttr *attr,
   }
   else {
     LibertyAttrValue *value = attr->firstValue();
-    if (value->isString()) {
+    if (value->isFloatSeq()) {
+      values = new FloatSeq();
+      values->assign(value->floatValues()->begin(), value->floatValues()->end());
+      scaleFloats(values, scale);
+    }
+    else if (value->isString()) {
       values = new FloatSeq;
       parseStringFloatList(value->stringValue(), scale, values, attr);
     }

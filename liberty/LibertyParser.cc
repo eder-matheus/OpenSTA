@@ -492,6 +492,21 @@ LibertyFloatSeqAttrValue::~LibertyFloatSeqAttrValue()
   delete values_;
 }
 
+float
+LibertyFloatSeqAttrValue::floatValue()
+{
+  if (values_ && !values_->empty())
+    return (*values_)[0];
+  return 0.0;
+}
+
+const char *
+LibertyFloatSeqAttrValue::stringValue()
+{
+  criticalError(1128, "LibertyFloatSeqAttrValue called for string value");
+  return nullptr;
+}
+
 ////////////////////////////////////////////////////////////////
 
 LibertyDefine::LibertyDefine(const char *name,

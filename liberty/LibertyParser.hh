@@ -56,6 +56,7 @@ typedef Map<std::string, LibertyGroupVisitor*>LibertyGroupVisitorMap;
 typedef LibertyAttrValueSeq::Iterator LibertyAttrValueIterator;
 typedef Vector<LibertyVariable*> LibertyVariableSeq;
 typedef Vector<LibertyGroup*> LibertyGroupSeq;
+typedef Vector<float> FloatSeq;
 
 enum class LibertyAttrType { attr_string, attr_int, attr_double,
 			     attr_boolean, attr_unknown };
@@ -268,7 +269,7 @@ class LibertyFloatSeqAttrValue : public LibertyAttrValue
 {
 public:
   LibertyFloatSeqAttrValue(FloatSeq* values);
-  virtual ~LibertyFloatSeqAttrValue() {}
+  virtual ~LibertyFloatSeqAttrValue();
   virtual bool isString() { return false; }
   virtual bool isFloat() { return false; }
   virtual bool isFloatSeq() { return true; }

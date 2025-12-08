@@ -25,6 +25,29 @@
 #include <cstdlib>
 #include <vector>
 
+namespace {
+bool
+parseOptimisticFloatSeq(const char *str, std::vector<float> &floats)
+{
+  floats.clear();
+  const char *p = str;
+  char *end;
+  bool has_float = false;
+  while (*p) {
+    // Skip whitespace and delimiters
+    while (*p && (isspace(*p) || *p == ',' || *p == '\"' || *p == '{' || *p == '}')) p++;
+    if (!*p) break;
+    
+    float f = strtof(p, &end);
+    if (p == end) return false; // Failed to parse float
+    floats.push_back(f);
+    has_float = true;
+    p = end;
+  }
+  return has_float;
+}
+};
+
 namespace sta {
 
 void
@@ -53,10 +76,10 @@ writeLibertyBinary(std::istream *in_stream,
   // go back to end of file
   out_stream->seekp(0, out_stream->end);
   // Write string table
-  uint64_t string_table_size = writer.string_table().size();
+  uint32_t string_table_size = writer.string_table().size();
   out_stream->write(reinterpret_cast<const char*>(&string_table_size), sizeof(string_table_size));
   for (const auto &entry : writer.string_table()) {
-    uint64_t string_length = entry.first.size();
+    uint32_t string_length = entry.first.size();
     out_stream->write(reinterpret_cast<const char*>(&string_length), sizeof(string_length));
     out_stream->write(entry.first.c_str(), entry.first.size());
     out_stream->write(reinterpret_cast<const char*>(&entry.second), sizeof(entry.second));
@@ -114,45 +137,32 @@ LibertyBinaryWriter::visitAttr(LibertyAttr *attr)
     LibertyAttrValueSeq *values = attr->values();
     uint32_t count = values ? values->size() : 0;
     stream_->write(reinterpret_cast<const char*>(&count), sizeof(count));
-    
-    if (values) {
-      // Optimization: Check if all values are strings that can be converted to floats
-      bool all_floats = true;
-      std::vector<LibertyFloatAttrValue> float_values;
-      float_values.reserve(count);
-
-      for (LibertyAttrValue *val : *values) {
-        if (val->isString()) {
-          std::cout << "String value: " << val->stringValue() << std::endl;
-          char *end;
-          const char *str = val->stringValue();
-          float f = strtof(str, &end);
-          if (*str != '\0' && *end == '\0') {
-            float_values.push_back(LibertyFloatAttrValue(f));
+    if (!values) {
+      return;
+    }
+    for (LibertyAttrValue *val : *values) {
+      if (val->isString()) {
+        std::vector<float> float_values;
+        if (parseOptimisticFloatSeq(val->stringValue(), float_values)) {
+          if (float_values.size() == 1) {
+            LibertyFloatAttrValue float_val(float_values[0]);
+            writeValue(&float_val);
+            continue;
           }
-          else {
-            all_floats = false;
-            break;
+          FloatSeq* float_seq = new FloatSeq();
+          float_seq->reserve(float_values.size());
+          for (float f : float_values) {
+            float_seq->push_back(f);
           }
-        }
-        else if (val->isFloat()) {
-          float_values.push_back(LibertyFloatAttrValue(val->floatValue()));
-        }
-        else {
-          all_floats = false;
-          break;
-        }
-      }
-
-      if (all_floats) {
-        for (LibertyFloatAttrValue &f : float_values) {
-          writeValue(&f);
+          // ownership of float_seq is transferred to float_seq_val
+          LibertyFloatSeqAttrValue float_seq_val(float_seq);
+          writeValue(&float_seq_val);
+        } else {
+          writeValue(val);
         }
       }
       else {
-        for (LibertyAttrValue *val : *values) {
-          writeValue(val);
-        }
+        writeValue(val);
       }
     }
   }
@@ -197,11 +207,11 @@ LibertyBinaryWriter::writeString(const char *str)
   stream_->write(reinterpret_cast<const char*>(&type), sizeof(type));
   
   if (string_table_.find(str) != string_table_.end()) {
-    uint64_t offset = string_table_[str];
+    uint32_t offset = string_table_[str];
     stream_->write(reinterpret_cast<const char*>(&offset), sizeof(offset));
     return;
   } else {
-    uint64_t offset = string_table_.size();
+    uint32_t offset = string_table_.size();
     string_table_[str] = offset;
     stream_->write(reinterpret_cast<const char*>(&offset), sizeof(offset));
   }
@@ -240,6 +250,22 @@ LibertyBinaryWriter::writeValue(LibertyAttrValue *value)
   }
   else if (value->isFloat()) {
     writeFloat(value->floatValue());
+  }
+  else if (value->isFloatSeq()) {
+    FloatSeq *floats = value->floatValues();
+    writeFloatSeq(*floats);
+  }
+}
+
+void
+LibertyBinaryWriter::writeFloatSeq(const std::vector<float> &floats)
+{
+  uint8_t type = static_cast<uint8_t>(LibertyBinaryValueType::FLOAT_SEQ);
+  stream_->write(reinterpret_cast<const char*>(&type), sizeof(type));
+  uint32_t count = floats.size();
+  stream_->write(reinterpret_cast<const char*>(&count), sizeof(count));
+  if (count > 0) {
+    stream_->write(reinterpret_cast<const char*>(floats.data()), count * sizeof(float));
   }
 }
 

@@ -1,0 +1,29 @@
+library(test_lib) {
+  delay_model : table_lookup;
+  define(my_float_seq, library, string);
+  
+  my_float_seq : "1.1, 2.2, 3.3, 4.4";
+  
+  lu_table_template(test_template) {
+    variable_1 : input_net_transition;
+    index_1("0.1, 0.5");
+  }
+
+  cell(TEST_CELL) {
+    pin(A) {
+      direction : input;
+      capacitance : 1.0;
+    }
+    pin(Z) {
+      direction : output;
+      function : "A";
+      timing() {
+        related_pin : "A";
+        cell_rise(test_template) {
+          index_1("0.1, 0.5");
+          values("1.0, 2.0");
+        }
+      }
+    }
+  }
+}
