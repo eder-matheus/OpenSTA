@@ -149,13 +149,12 @@ LibertyBinaryWriter::visitAttr(LibertyAttr *attr)
             writeValue(&float_val);
             continue;
           }
-          FloatSeq* float_seq = new FloatSeq();
-          float_seq->reserve(float_values.size());
+          FloatSeq float_seq;
+          float_seq.reserve(float_values.size());
           for (float f : float_values) {
-            float_seq->push_back(f);
+            float_seq.push_back(f);
           }
-          // ownership of float_seq is transferred to float_seq_val
-          LibertyFloatSeqAttrValue float_seq_val(float_seq);
+          LibertyFloatSeqAttrValue float_seq_val(reinterpret_cast<char*>(float_seq.data()), float_seq.size());
           writeValue(&float_seq_val);
         } else {
           writeValue(val);
@@ -252,8 +251,9 @@ LibertyBinaryWriter::writeValue(LibertyAttrValue *value)
     writeFloat(value->floatValue());
   }
   else if (value->isFloatSeq()) {
-    FloatSeq *floats = value->floatValues();
-    writeFloatSeq(*floats);
+    FloatSeq floats;
+    value->fillFloatSeq(&floats);
+    writeFloatSeq(floats);
   }
 }
 

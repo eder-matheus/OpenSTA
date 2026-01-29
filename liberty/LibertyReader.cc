@@ -4777,10 +4777,8 @@ LibertyReader::makeFloatTable(LibertyAttr *attr,
     row->reserve(cols);
     table->push_back(row);
     if (value->isFloatSeq()) {
-      FloatSeq *floats = value->floatValues();
-      row->reserve(floats->size());
-      for (float f : *floats)
-	row->push_back(f * scale);
+      value->fillFloatSeq(row);
+      scaleFloats(row, scale);
     }
     else if (value->isString()) {
       const char *values_list = value->stringValue();
@@ -5160,7 +5158,7 @@ LibertyReader::readFloatSeq(LibertyAttr *attr,
       LibertyAttrValue *value = value_iter.next();
       if (value->isFloatSeq()) {
 	values = new FloatSeq;
-        values->assign(value->floatValues()->begin(), value->floatValues()->end());
+        value->fillFloatSeq(values);
 	scaleFloats(values, scale);
       }
       else if (value->isString()) {
@@ -5181,7 +5179,7 @@ LibertyReader::readFloatSeq(LibertyAttr *attr,
     LibertyAttrValue *value = attr->firstValue();
     if (value->isFloatSeq()) {
       values = new FloatSeq();
-      values->assign(value->floatValues()->begin(), value->floatValues()->end());
+      value->fillFloatSeq(values);
       scaleFloats(values, scale);
     }
     else if (value->isString()) {

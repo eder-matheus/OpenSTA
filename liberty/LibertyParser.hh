@@ -126,6 +126,9 @@ public:
   LibertyGroup(const char *type,
 	       LibertyAttrValueSeq *params,
 	       int line);
+  LibertyGroup(std::string type,
+	       LibertyAttrValueSeq *params,
+	       int line);
   virtual ~LibertyGroup();
   virtual bool isGroup() const { return true; }
   const char *type() const { return type_.c_str(); }
@@ -172,6 +175,7 @@ class LibertyAttr : public LibertyStmt
 public:
   LibertyAttr(const char *name,
 	      int line);
+  LibertyAttr(std::string name, int line);
   const char *name() const { return name_.c_str(); }
   virtual bool isAttribute() const { return true; }
   virtual bool isSimple() const = 0;
@@ -191,6 +195,9 @@ public:
   LibertySimpleAttr(const char *name,
 		    LibertyAttrValue *value,
 		    int line);
+  LibertySimpleAttr(std::string name,
+			LibertyAttrValue *value,
+			int line);
   virtual ~LibertySimpleAttr();
   virtual bool isSimple() const { return true; }
   virtual bool isComplex() const { return false; }
@@ -209,6 +216,9 @@ public:
   LibertyComplexAttr(const char *name,
 		     LibertyAttrValueSeq *values,
 		     int line);
+  LibertyComplexAttr(std::string name,
+			 LibertyAttrValueSeq *values,
+			 int line);
   virtual ~LibertyComplexAttr();
   virtual bool isSimple() const { return false; }
   virtual bool isComplex() const { return true; }
@@ -229,7 +239,7 @@ public:
   virtual bool isFloat() = 0;
   virtual bool isFloatSeq() = 0;
   virtual float floatValue() = 0;
-  virtual FloatSeq* floatValues() = 0;
+  virtual void fillFloatSeq(FloatSeq *seq) = 0;
   virtual const char *stringValue() = 0;
 };
 
@@ -237,12 +247,13 @@ class LibertyStringAttrValue : public LibertyAttrValue
 {
 public:
   LibertyStringAttrValue(const char *value);
+  LibertyStringAttrValue(std::string value);
   virtual ~LibertyStringAttrValue() {}
   virtual bool isFloat() { return false; }
   virtual bool isString() { return true; }
   virtual bool isFloatSeq() { return false; }
   virtual float floatValue();
-  virtual FloatSeq* floatValues() { return nullptr; }
+  virtual void fillFloatSeq(FloatSeq *seq) {}
   virtual const char *stringValue();
 
 private:
@@ -258,7 +269,7 @@ public:
   virtual bool isFloat() { return true; }
   virtual bool isFloatSeq() { return false; }
   virtual float floatValue();
-  virtual FloatSeq* floatValues() { return nullptr; }
+  virtual void fillFloatSeq(FloatSeq *seq) {}
   virtual const char *stringValue();
 
 private:
@@ -268,17 +279,18 @@ private:
 class LibertyFloatSeqAttrValue : public LibertyAttrValue
 {
 public:
-  LibertyFloatSeqAttrValue(FloatSeq* values);
-  virtual ~LibertyFloatSeqAttrValue();
+  LibertyFloatSeqAttrValue(char *values, std::size_t size);
+  virtual ~LibertyFloatSeqAttrValue() {}
   virtual bool isString() { return false; }
   virtual bool isFloat() { return false; }
   virtual bool isFloatSeq() { return true; }
   virtual float floatValue();
-  virtual FloatSeq* floatValues() { return values_; }
+  virtual void fillFloatSeq(FloatSeq *seq);
   virtual const char *stringValue();
 
 private:
-  FloatSeq* values_;
+  char *values_;
+  std::size_t size_;
 };
 
 // Define statements define new simple attributes.
@@ -312,6 +324,10 @@ public:
   LibertyVariable(const char *var,
 		  float value,
 		  int line);
+  LibertyVariable(std::string var,
+		  float value,
+		  int line);
+  virtual ~LibertyVariable() {}
   virtual bool isVariable() const { return true; }
   const char *variable() const { return var_.c_str(); }
   float value() const { return value_; }

@@ -264,7 +264,21 @@ LibertyGroup::LibertyGroup(const char *type,
 			   LibertyAttrValueSeq *params,
 			   int line) :
   LibertyStmt(line),
-  type_(type),
+  type_(std::move(type)),
+  params_(params),
+  attrs_(nullptr),
+  attr_map_(nullptr),
+  subgroups_(nullptr),
+  define_map_(nullptr),
+  variables_(nullptr)
+{
+}
+
+LibertyGroup::LibertyGroup(std::string type,
+			       LibertyAttrValueSeq *params,
+			       int line) :
+  LibertyStmt(line),
+  type_(std::move(type)),
   params_(params),
   attrs_(nullptr),
   attr_map_(nullptr),
@@ -399,10 +413,24 @@ LibertyAttr::LibertyAttr(const char *name,
 {
 }
 
+LibertyAttr::LibertyAttr(std::string name, int line) :
+  LibertyStmt(line),
+  name_(std::move(name))
+{
+}
+
 LibertySimpleAttr::LibertySimpleAttr(const char *name,
 				     LibertyAttrValue *value,
 				     int line) :
   LibertyAttr(name, line),
+  value_(value)
+{
+}
+
+LibertySimpleAttr::LibertySimpleAttr(std::string name,
+				     LibertyAttrValue *value,
+				     int line) :
+  LibertyAttr(std::move(name), line),
   value_(value)
 {
 }
@@ -427,6 +455,14 @@ LibertyComplexAttr::LibertyComplexAttr(const char *name,
 {
 }
 
+LibertyComplexAttr::LibertyComplexAttr(std::string name,
+				       LibertyAttrValueSeq *values,
+				       int line) :
+  LibertyAttr(std::move(name), line),
+  values_(values)
+{
+}
+
 LibertyComplexAttr::~LibertyComplexAttr()
 {
   if (values_) {
@@ -447,6 +483,12 @@ LibertyComplexAttr::firstValue()
 LibertyStringAttrValue::LibertyStringAttrValue(const char *value) :
   LibertyAttrValue(),
   value_(value)
+{
+}
+
+LibertyStringAttrValue::LibertyStringAttrValue(std::string value) :
+  LibertyAttrValue(),
+  value_(std::move(value))
 {
 }
 
@@ -481,23 +523,26 @@ LibertyFloatAttrValue::stringValue()
   return nullptr;
 }
 
-LibertyFloatSeqAttrValue::LibertyFloatSeqAttrValue(FloatSeq* values) :
+LibertyFloatSeqAttrValue::LibertyFloatSeqAttrValue(char *values, std::size_t size) :
   LibertyAttrValue(),
-  values_(values)
+  values_(values),
+  size_(size)
 {
-}
-
-LibertyFloatSeqAttrValue::~LibertyFloatSeqAttrValue()
-{
-  delete values_;
 }
 
 float
 LibertyFloatSeqAttrValue::floatValue()
 {
-  if (values_ && !values_->empty())
-    return (*values_)[0];
-  return 0.0;
+  float value;
+  std::memcpy(&value, values_, sizeof(float));
+  return value;
+}
+
+void LibertyFloatSeqAttrValue::fillFloatSeq(FloatSeq *seq)
+{
+  seq->resize(size_);
+  float* data = seq->data();
+  std::memcpy(data, values_, size_ * sizeof(float));
 }
 
 const char *
@@ -531,6 +576,14 @@ LibertyVariable::LibertyVariable(const char *var,
 {
 }
 
+LibertyVariable::LibertyVariable(std::string var,
+				     float value,
+				     int line) :
+  LibertyStmt(line),
+  var_(std::move(var)),
+  value_(value)
+{
+}
 ////////////////////////////////////////////////////////////////
 
 LibertyScanner::LibertyScanner(std::istream *stream,
