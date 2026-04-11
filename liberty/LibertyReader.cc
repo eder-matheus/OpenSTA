@@ -3761,16 +3761,20 @@ void FilterLibertyGroupVisitor::begin(const LibertyGroup *group,
 }
 
 void FilterLibertyGroupVisitor::end(const LibertyGroup *group,
-                                    LibertyGroup */*parent_group*/)
+                                    LibertyGroup *parent_group)
 {
   depth_ -= 2;
   if (skip_group_) {
     if (skip_group_ == group) {
       skip_group_ = nullptr;
     }
-    return;
+  } else {
+    printf("%s}\n", indent().c_str());
   }
-  printf("%s}\n", indent().c_str());
+  // Free the completed group from its parent to bound memory usage.
+  // All content has already been visited/printed by this point.
+  if (parent_group)
+    parent_group->deleteSubgroup(group);
 }
 
 std::string FilterLibertyGroupVisitor::asString(const LibertyAttrValue &value)
