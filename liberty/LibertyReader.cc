@@ -3711,57 +3711,57 @@ OutputWaveform::releaseCurrents()
 class FilterLibertyGroupVisitor : public LibertyGroupVisitor
 {
 public:
-  virtual void begin(LibertyGroup *group);
-  virtual void end(LibertyGroup *group);
-  virtual void visitAttr(LibertyAttr *attr);
+  virtual void begin(const LibertyGroup *group,
+                     LibertyGroup *parent_group);
+  virtual void end(const LibertyGroup *group,
+                   LibertyGroup *parent_group);
+  virtual void visitAttr(const LibertySimpleAttr *attr);
+  virtual void visitAttr(const LibertyComplexAttr *attr);
   virtual void visitVariable(LibertyVariable *variable);
-  virtual bool save(LibertyGroup *) {return true;}
-  virtual bool save(LibertyAttr *) {return true;}
-  virtual bool save(LibertyVariable *) {return true;}
 
 private:
   std::string indent() const { return std::string(depth_, ' '); }
-  std::string asString(LibertyAttrValue* value);
-  std::string asString(LibertyAttr *attr);
+  std::string asString(const LibertyAttrValue &value);
 
-  LibertyGroup *skip_group_{nullptr};
+  const LibertyGroup *skip_group_{nullptr};
   int depth_ = 0;
 };
 
-void FilterLibertyGroupVisitor::begin(LibertyGroup *group)
+void FilterLibertyGroupVisitor::begin(const LibertyGroup *group,
+                                      LibertyGroup */*parent_group*/)
 {
   if (skip_group_) {
     depth_ += 2;
     return;
   }
 
-  if (strcmp(group->type(), "normalized_driver_waveform") == 0 ||
-      strncmp(group->type(), "output_current", 14) == 0 ||
-      strncmp(group->type(), "ocv", 3) == 0 ||
-      strncmp(group->type(), "output_ccb", 10) == 0 ||
-      strncmp(group->type(), "input_ccb", 9) == 0 ||
-      strncmp(group->type(), "receiver_capacitance", 20) == 0) {
+  const std::string &type = group->type();
+  if (type == "normalized_driver_waveform" ||
+      type.compare(0, 14, "output_current") == 0 ||
+      type.compare(0, 3, "ocv") == 0 ||
+      type.compare(0, 10, "output_ccb") == 0 ||
+      type.compare(0, 9, "input_ccb") == 0 ||
+      type.compare(0, 20, "receiver_capacitance") == 0) {
     skip_group_ = group;
     depth_ += 2;
     return;
   }
 
-  const char* name1 = group->firstName();
-  const char* name2 = group->secondName();
   std::string name;
-  if (name1) {
-    name += name1;
+  if (group->hasFirstParam()) {
+    name += group->firstParam();
   }
-  if (name2) {
+  if (group->hasSecondParam()) {
     name += ',';
-    name += name2;
+    name += group->secondParam();
   }
 
-  printf("%s%s (%s) {\n", indent().c_str(), group->type(), name.c_str());
+  printf("%s%s (%s) {\n", indent().c_str(), type.c_str(), name.c_str());
   depth_ += 2;
 }
 
-void FilterLibertyGroupVisitor::end(LibertyGroup *group)
+void FilterLibertyGroupVisitor::end(const LibertyGroup *group,
+                                    LibertyGroup */*parent_group*/)
 {
   depth_ -= 2;
   if (skip_group_) {
@@ -3773,13 +3773,14 @@ void FilterLibertyGroupVisitor::end(LibertyGroup *group)
   printf("%s}\n", indent().c_str());
 }
 
-std::string FilterLibertyGroupVisitor::asString(LibertyAttrValue* value)
+std::string FilterLibertyGroupVisitor::asString(const LibertyAttrValue &value)
 {
   std::ostringstream s;
-  if (value->isFloat()) {
-    s << value->floatValue();
-  } else if (value->isString()) {
-    s << '"' << value->stringValue() << '"';
+  if (value.isFloat()) {
+    auto [fval, valid] = value.floatValue();
+    s << fval;
+  } else if (value.isString()) {
+    s << '"' << value.stringValue() << '"';
   } else {
     printf("Unknown value\n");
     exit(1);
@@ -3787,37 +3788,33 @@ std::string FilterLibertyGroupVisitor::asString(LibertyAttrValue* value)
   return s.str();
 }
 
-std::string FilterLibertyGroupVisitor::asString(LibertyAttr *attr)
+void FilterLibertyGroupVisitor::visitAttr(const LibertySimpleAttr *attr)
 {
-  std::ostringstream s;
-  s << indent();
-  if (attr->isSimple()) {
-    auto sattr = static_cast<LibertySimpleAttr*>(attr);
-    s << sattr->name() << " : " << asString(sattr->firstValue())
+  if (!skip_group_) {
+    std::ostringstream s;
+    s << indent();
+    s << attr->name() << " : " << asString(attr->value())
       << ";";
-  } else if (attr->isComplex()) {
-    auto cattr = static_cast<LibertyComplexAttr*>(attr);
+    printf("%s\n", s.str().c_str());
+  }
+}
+
+void FilterLibertyGroupVisitor::visitAttr(const LibertyComplexAttr *attr)
+{
+  if (!skip_group_) {
+    std::ostringstream s;
+    s << indent();
     bool first = true;
-    s << cattr->name() << " (";
-    for (auto value : *cattr->values()) {
+    s << attr->name() << " (";
+    for (const auto *value : attr->values()) {
       if (!first) {
         s << ", ";
       }
-      s << asString(value);
+      s << asString(*value);
       first = false;
     }
     s << ");";
-  } else {
-    printf("ERROR not simple or complex\n");
-    exit(1);
-  }
-  return s.str();
-}
-
-void FilterLibertyGroupVisitor::visitAttr(LibertyAttr *attr)
-{
-  if (!skip_group_) {
-    printf("%s\n", asString(attr).c_str());
+    printf("%s\n", s.str().c_str());
   }
 }
 
@@ -3829,16 +3826,7 @@ void
 filterLiberty(const char* filename, StaState *sta)
 {
   FilterLibertyGroupVisitor library_visitor;
-  auto report = sta->report();
-  gzstream::igzstream stream(filename);
-  if (stream.is_open()) {
-    LibertyParser reader(filename, &library_visitor, report);
-    LibertyScanner scanner(&stream, filename, &reader, report);
-    LibertyParse parser(&scanner, &reader);
-    parser.parse();
-  }
-  else
-    throw FileNotReadable(filename);
+  parseLibertyFile(filename, &library_visitor, sta->report());
 }
 
 
