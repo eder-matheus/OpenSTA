@@ -27,34 +27,43 @@
 #include <cctype>
 #include <cstdlib>
 #include <functional>
+#include <memory>
+#include <set>
 #include <string>
 #include <string_view>
 #include <sstream>
+#include <utility>
 
+#include "ConcreteLibrary.hh"
 #include "ContainerHelpers.hh"
-#include "Format.hh"
-#include "Report.hh"
 #include "Debug.hh"
 #include "EnumNameMap.hh"
-#include "Units.hh"
-#include "Transition.hh"
-#include "FuncExpr.hh"
-#include "TimingArc.hh"
-#include "TableModel.hh"
-#include "LeakagePower.hh"
-#include "InternalPower.hh"
-#include "LinearModel.hh"
-#include "Wireload.hh"
 #include "EquivCells.hh"
+#include "Format.hh"
+#include "FuncExpr.hh"
+#include "InternalPower.hh"
 #include "LibExprReader.hh"
 #include "Liberty.hh"
 #include "LibertyBuilder.hh"
+#include "LibertyClass.hh"
+#include "LibertyParser.hh"
 #include "LibertyReaderPvt.hh"
-#include "PortDirection.hh"
-#include "ParseBus.hh"
+#include "LinearModel.hh"
+#include "MinMax.hh"
 #include "Network.hh"
 #include "LibertyScanner.hh"
 #include "LibertyParser.hh"
+#include "NetworkClass.hh"
+#include "ParseBus.hh"
+#include "PortDirection.hh"
+#include "Sequential.hh"
+#include "StringUtil.hh"
+#include "TableModel.hh"
+#include "TimingArc.hh"
+#include "TimingModel.hh"
+#include "Transition.hh"
+#include "Units.hh"
+#include "Wireload.hh"
 
 extern int LibertyParse_debug;
 
@@ -76,14 +85,12 @@ readLibertyFile(std::string_view filename,
 LibertyReader::LibertyReader(std::string_view filename,
                              bool infer_latches,
                              Network *network) :
-  LibertyGroupVisitor(),
   filename_(filename),
   infer_latches_(infer_latches),
   report_(network->report()),
   debug_(network->debug()),
   network_(network),
-  builder_(debug_, report_),
-  library_(nullptr)
+  builder_(debug_, report_)
 {
   defineVisitors();
 }
@@ -389,7 +396,7 @@ LibertyReader::readUnit(std::string_view unit_attr_name,
       size_t mult_end = units.find_first_not_of("0123456789");
       float mult = 1.0F;
       std::string scale_suffix;
-      if (mult_end != units.npos) {
+      if (mult_end != std::string::npos) {
         std::string unit_mult = units.substr(0, mult_end);
         scale_suffix = units.substr(mult_end);
         if (unit_mult == "1")
@@ -701,11 +708,11 @@ LibertyReader::readScaleFactors(const LibertyGroup *scale_group,
                                 ScaleFactors *scale_factors)
 {
   // Skip unknown type.
-  for (int type_index = 0; type_index < scale_factor_type_count - 1; type_index++) {
+  for (size_t type_index = 0; type_index < scale_factor_type_count - 1; type_index++) {
     ScaleFactorType type = static_cast<ScaleFactorType>(type_index);
     const std::string &type_name = scaleFactorTypeName(type);
     // Skip unknown pvt.
-    for (int pvt_index = 0; pvt_index < scale_factor_pvt_count - 1; pvt_index++) {
+    for (size_t pvt_index = 0; pvt_index < scale_factor_pvt_count - 1; pvt_index++) {
       ScaleFactorPvt pvt = static_cast<ScaleFactorPvt>(pvt_index);
       const std::string pvt_name = scaleFactorPvtName(pvt);
       std::string attr_name;
@@ -1608,8 +1615,7 @@ LibertyReader::readMinPulseWidth(LibertyCell *cell,
       }
     }
     if (timing_attrs)
-      builder_.makeTimingArcs(cell, port, port, nullptr, timing_attrs,
-                              port_group->line());
+      builder_.makeTimingArcs(cell, port, port, nullptr, timing_attrs);
   }
 }
 
@@ -1761,27 +1767,27 @@ LibertyReader::seqPortNames(const LibertyGroup *group,
                             bool &has_size,
                             size_t &size)
 {
-  if (group->params().size() == 1) {
+  has_size = false;
+  const size_t param_count = group->params().size();
+  if (param_count == 1) {
     // out_port
     out_name = group->firstParam();
     size = 1;
-    has_size = false;
   }
-  if (group->params().size() == 2) {
+  else if (param_count == 2) {
     // out_port, out_port_inv
     out_name = group->firstParam();
     out_inv_name = group->secondParam();
     size = 1;
-    has_size = false;
   }
-  else if (group->params().size() == 3) {
+  else if (param_count == 3) {
     LibertyAttrValue *third_value = group->params()[2];
     auto [size_flt, size_valid] = third_value->floatValue();
     if (size_valid) {
       // out_port, out_port_inv, bus_size
       out_name = group->firstParam();
       out_inv_name = group->secondParam();
-      size = static_cast<int>(size_flt);
+      size = static_cast<size_t>(size_flt);
       has_size = true;
     }
     else {
@@ -1840,7 +1846,7 @@ LibertyReader::readCellAttributes(LibertyCell *cell,
   }
 
   readScaleFactors(cell, cell_group);
-  readLeagageGrouops(cell, cell_group);
+  readLeakageGrouops(cell, cell_group);
   readStatetable(cell, cell_group);
   readModeDefs(cell, cell_group);
 }
@@ -1918,8 +1924,8 @@ LibertyReader::makeTimingArcs(LibertyCell *cell,
 {
   for (const LibertyGroup *timing_group : port_group->findSubgroups("timing")) {
     TimingArcAttrsPtr timing_attrs = std::make_shared<TimingArcAttrs>();
-    readTimingArcAttrs(cell, timing_group, timing_attrs);
-    makeTimingModels(cell, timing_group, timing_attrs);
+    readTimingArcAttrs(cell, timing_group, *timing_attrs);
+    makeTimingModels(cell, timing_group, *timing_attrs);
 
     LibertyPort *related_output_port = findLibertyPort(cell, timing_group,
                                                        "related_output_pin");
@@ -1932,7 +1938,7 @@ LibertyReader::makeTimingArcs(LibertyCell *cell,
           to_port->direction()->isInput())
         warn(1209, timing_group, "combinational timing to an input port.");
 
-      if (related_port_names.size() || related_bus_names.size()) {
+      if (!related_port_names.empty() || !related_bus_names.empty()) {
         for (const std::string &from_port_name : related_port_names) {
           debugPrint(debug_, "liberty", 2, "  timing {} -> {}",
                      from_port_name, to_port->name());
@@ -1952,8 +1958,7 @@ LibertyReader::makeTimingArcs(LibertyCell *cell,
                  || timing_type == TimingType::max_clock_tree_path))
         warn(1243, timing_group, "timing group missing related_pin/related_bus_pin.");
       else
-        makeTimingArcs(cell, to_port, related_output_port,
-                       timing_attrs, timing_group->line());
+        makeTimingArcs(cell, to_port, related_output_port, timing_attrs);
     }
   }
 }
@@ -1961,14 +1966,14 @@ LibertyReader::makeTimingArcs(LibertyCell *cell,
 void
 LibertyReader::readTimingArcAttrs(LibertyCell *cell,
                                   const LibertyGroup *timing_group,
-                                  TimingArcAttrsPtr timing_attrs)
+                                  TimingArcAttrs &timing_attrs)
 {
   readTimingSense(timing_group, timing_attrs);
   readTimingType(timing_group, timing_attrs);
   readTimingWhen(cell, timing_group, timing_attrs);
   readTimingMode(timing_group, timing_attrs);
   readGroupAttrFloat("ocv_arc_depth", timing_group,
-                    [timing_attrs](float v) { timing_attrs->setOcvArcDepth(v); });
+                    [&timing_attrs](float v) { timing_attrs.setOcvArcDepth(v); });
 }
 
 void
@@ -1986,17 +1991,17 @@ LibertyReader::readGroupAttrFloat(std::string_view attr_name,
 
 void
 LibertyReader::readTimingSense(const LibertyGroup *timing_group,
-                               TimingArcAttrsPtr timing_attrs)
+                               TimingArcAttrs &timing_attrs)
 {
   const LibertySimpleAttr *sense_attr = timing_group->findSimpleAttr("timing_sense");
   if (sense_attr) {
     const std::string &sense_name = sense_attr->stringValue();
     if (sense_name == "non_unate")
-      timing_attrs->setTimingSense(TimingSense::non_unate);
+      timing_attrs.setTimingSense(TimingSense::non_unate);
     else if (sense_name == "positive_unate")
-      timing_attrs->setTimingSense(TimingSense::positive_unate);
+      timing_attrs.setTimingSense(TimingSense::positive_unate);
     else if (sense_name == "negative_unate")
-      timing_attrs->setTimingSense(TimingSense::negative_unate);
+      timing_attrs.setTimingSense(TimingSense::negative_unate);
     else
       warn(1245, timing_group, "unknown timing_sense {}.", sense_name);
   }
@@ -2004,7 +2009,7 @@ LibertyReader::readTimingSense(const LibertyGroup *timing_group,
 
 void
 LibertyReader::readTimingType(const LibertyGroup *timing_group,
-                              TimingArcAttrsPtr timing_attrs)
+                              TimingArcAttrs &timing_attrs)
 {
   TimingType type = TimingType::combinational;
   const LibertySimpleAttr *type_attr = timing_group->findSimpleAttr("timing_type");
@@ -2016,43 +2021,43 @@ LibertyReader::readTimingType(const LibertyGroup *timing_group,
       type = TimingType::combinational;
     }
   }
-  timing_attrs->setTimingType(type);
+  timing_attrs.setTimingType(type);
 }
 
 void
 LibertyReader::readTimingWhen(const LibertyCell *cell,
                               const LibertyGroup *timing_group,
-                              TimingArcAttrsPtr timing_attrs)
+                              TimingArcAttrs &timing_attrs)
 {
   const LibertySimpleAttr *when_attr = timing_group->findSimpleAttr("when");
   if (when_attr) {
     const std::string &when = when_attr->stringValue();
     if (!when.empty()) {
       FuncExpr *when_expr = parseFunc(when, "when", cell, when_attr->line());
-      timing_attrs->setCond(when_expr);
+      timing_attrs.setCond(when_expr);
     }
   }
 
   const LibertySimpleAttr *cond_attr = timing_group->findSimpleAttr("sdf_cond");
   if (cond_attr) {
     const std::string &cond = cond_attr->stringValue();
-    timing_attrs->setSdfCond(cond);
+    timing_attrs.setSdfCond(cond);
   }
   cond_attr = timing_group->findSimpleAttr("sdf_cond_start");
   if (cond_attr) {
     const std::string &cond = cond_attr->stringValue();
-    timing_attrs->setSdfCondStart(cond);
+    timing_attrs.setSdfCondStart(cond);
   }
   cond_attr = timing_group->findSimpleAttr("sdf_cond_end");
   if (cond_attr) {
     const std::string &cond = cond_attr->stringValue();
-    timing_attrs->setSdfCondEnd(cond);
+    timing_attrs.setSdfCondEnd(cond);
   }
 }
 
 void
 LibertyReader::readTimingMode(const LibertyGroup *timing_group,
-                              TimingArcAttrsPtr timing_attrs)
+                              TimingArcAttrs &timing_attrs)
 {
   const LibertyComplexAttrSeq &mode_attrs = timing_group->findComplexAttrs("mode");
   if (!mode_attrs.empty()) {
@@ -2061,13 +2066,13 @@ LibertyReader::readTimingMode(const LibertyGroup *timing_group,
     if (mode_values.size() == 2) {
       LibertyAttrValue *value = mode_values[0];
       if (value->isString())
-        timing_attrs->setModeName(value->stringValue());
+        timing_attrs.setModeName(value->stringValue());
       else
         warn(1248, mode_attr, "mode name is not a string.");
 
       value = mode_values[1];
       if (value->isString())
-        timing_attrs->setModeValue(value->stringValue());
+        timing_attrs.setModeValue(value->stringValue());
       else
         warn(1246, mode_attr, "mode value is not a string.");
     }
@@ -2079,7 +2084,7 @@ LibertyReader::readTimingMode(const LibertyGroup *timing_group,
 void
 LibertyReader::makeTimingModels(LibertyCell *cell,
                                 const LibertyGroup *timing_group,
-                                TimingArcAttrsPtr timing_attrs)
+                                TimingArcAttrs &timing_attrs)
 {
    switch (cell->libertyLibrary()->delayModelType()) {
   case DelayModelType::cmos_linear:
@@ -2099,7 +2104,7 @@ LibertyReader::makeTimingModels(LibertyCell *cell,
 void
 LibertyReader::makeLinearModels(LibertyCell *cell,
                                 const LibertyGroup *timing_group,
-                                TimingArcAttrsPtr timing_attrs)
+                                TimingArcAttrs &timing_attrs)
 {
   LibertyLibrary *library = cell->libertyLibrary();
   for (const RiseFall *rf : RiseFall::range()) {
@@ -2113,7 +2118,7 @@ LibertyReader::makeLinearModels(LibertyCell *cell,
       library->defaultIntrinsic(rf, intr, intr_exists);
     TimingModel *model = nullptr;
     if (intr_exists) {
-      if (timingTypeIsCheck(timing_attrs->timingType()))
+      if (timingTypeIsCheck(timing_attrs.timingType()))
         model = new CheckLinearModel(cell, intr);
       else {
         std::string res_attr_name = sta::format("{}_resistance", rf->to_string());
@@ -2127,7 +2132,7 @@ LibertyReader::makeLinearModels(LibertyCell *cell,
                                         res, res_exists);
         model = new GateLinearModel(cell, intr, res);
       }
-      timing_attrs->setModel(rf, model);
+      timing_attrs.setModel(rf, model);
     }
   }
 }
@@ -2135,7 +2140,7 @@ LibertyReader::makeLinearModels(LibertyCell *cell,
 void
 LibertyReader::makeTableModels(LibertyCell *cell,
                                const LibertyGroup *timing_group,
-                               TimingArcAttrsPtr timing_attrs)
+                               TimingArcAttrs &timing_attrs)
 {
   bool found_model = false;
   for (const RiseFall *rf : RiseFall::range()) {
@@ -2172,11 +2177,11 @@ LibertyReader::makeTableModels(LibertyCell *cell,
       ReceiverModelPtr receiver_model = readReceiverCapacitance(timing_group, rf);
       OutputWaveforms *output_waveforms = readOutputWaveforms(timing_group, rf);
 
-      timing_attrs->setModel(rf, new GateTableModel(cell, delay_models,
-                                                    slew_models,
-                                                    receiver_model,
-                                                    output_waveforms));
-      TimingType timing_type = timing_attrs->timingType();
+      timing_attrs.setModel(rf, new GateTableModel(cell, delay_models,
+                                                   slew_models,
+                                                   std::move(receiver_model),
+                                                   output_waveforms));
+      TimingType timing_type = timing_attrs.timingType();
       if (isGateTimingType(timing_type)) {
         if (slew_model == nullptr)
           warn(1210, timing_group, "missing {}_transition.", rf->name());
@@ -2188,7 +2193,7 @@ LibertyReader::makeTableModels(LibertyCell *cell,
 
     std::string constraint_attr_name  = sta::format("{}_constraint", rf->to_string());
     ScaleFactorType scale_factor_type = 
-      timingTypeScaleFactorType(timing_attrs->timingType());
+      timingTypeScaleFactorType(timing_attrs.timingType());
     TableModel *check_model = readTableModel(timing_group,
                                              constraint_attr_name,
                                              rf, TableTemplateType::delay,
@@ -2202,7 +2207,7 @@ LibertyReader::makeTableModels(LibertyCell *cell,
                     sta::format("ocv_mean_shift_{}_constraiint", rf->to_string()),
                     sta::format("ocv_skewness_{}_constraiint", rf->to_string()),
                     rf, check_models, CheckTableModel::checkAxes);
-      timing_attrs->setModel(rf, new CheckTableModel(cell, check_models));
+      timing_attrs.setModel(rf, new CheckTableModel(cell, check_models));
       found_model = true;
     }
   }
@@ -2235,7 +2240,7 @@ LibertyReader::readTableModel(const LibertyGroup *timing_group,
                               TableTemplateType template_type,
                               float scale,
                               ScaleFactorType scale_factor_type,
-                              const std::function<bool(TableModel *model)> check_axes)
+                              const std::function<bool(TableModel *model)> &check_axes)
 {
   const LibertyGroup *table_group = timing_group->findSubgroup(table_group_name);
   if (table_group)
@@ -2252,7 +2257,7 @@ LibertyReader::readLvfModels(const LibertyGroup *timing_group,
                              const std::string &skewness_group_name,
                              const RiseFall *rf,
                              TableModels *table_models,
-                             const std::function<bool(TableModel *model)> check_axes)
+                             const std::function<bool(TableModel *model)> &check_axes)
 {
   TableModelsEarlyLate sigmas =
     readEarlyLateTableModels(timing_group,
@@ -2298,7 +2303,7 @@ LibertyReader::readEarlyLateTableModels(const LibertyGroup *timing_group,
                                         TableTemplateType template_type,
                                         float scale,
                                         ScaleFactorType scale_factor_type,
-                                        const std::function<bool(TableModel *model)> check_axes)
+                                        const std::function<bool(TableModel *model)> &check_axes)
 {
   TableModelsEarlyLate models{};
   for (const LibertyGroup *table_group : timing_group->findSubgroups(table_group_name)){
@@ -2581,41 +2586,41 @@ LibertyReader::makeTimingArcs(LibertyCell *cell,
                               LibertyPort *to_port,
                               LibertyPort *related_out_port,
                               bool one_to_one,
-                              TimingArcAttrsPtr timing_attrs,
+                              const TimingArcAttrsPtr &timing_attrs,
                               int timing_line)
 {
   PortNameBitIterator from_port_iter(cell, from_port_name, this, timing_line);
   if (from_port_iter.size() == 1 && !to_port->hasMembers()) {
     // one -> one
-    if (from_port_iter.hasNext()) {
-      LibertyPort *from_port = from_port_iter.next();
+    if (from_port_iter.PortNameBitIterator::hasNext()) {
+      LibertyPort *from_port = from_port_iter.PortNameBitIterator::next();
       if (from_port->direction()->isOutput())
         warn(1212, timing_line, "timing group from output port.");
       builder_.makeTimingArcs(cell, from_port, to_port, related_out_port,
-                              timing_attrs, timing_line);
+                              timing_attrs);
     }
   }
   else if (from_port_iter.size() > 1 && !to_port->hasMembers()) {
     // bus -> one
-    while (from_port_iter.hasNext()) {
-      LibertyPort *from_port = from_port_iter.next();
+    while (from_port_iter.PortNameBitIterator::hasNext()) {
+      LibertyPort *from_port = from_port_iter.PortNameBitIterator::next();
       if (from_port->direction()->isOutput())
         warn(1213, timing_line, "timing group from output port.");
       builder_.makeTimingArcs(cell, from_port, to_port, related_out_port,
-                              timing_attrs, timing_line);
+                              timing_attrs);
     }
   }
   else if (from_port_iter.size() == 1 && to_port->hasMembers()) {
     // one -> bus
-    if (from_port_iter.hasNext()) {
-      LibertyPort *from_port = from_port_iter.next();
+    if (from_port_iter.PortNameBitIterator::hasNext()) {
+      LibertyPort *from_port = from_port_iter.PortNameBitIterator::next();
       if (from_port->direction()->isOutput())
         warn(1214, timing_line, "timing group from output port.");
       LibertyPortMemberIterator bit_iter(to_port);
       while (bit_iter.hasNext()) {
         LibertyPort *to_port_bit = bit_iter.next();
         builder_.makeTimingArcs(cell, from_port, to_port_bit, related_out_port,
-                                timing_attrs, timing_line);
+                                timing_attrs);
       }
     }
   }
@@ -2634,33 +2639,31 @@ LibertyReader::makeTimingArcs(LibertyCell *cell,
       // align to/from iterators for one-to-one mapping
       while (from_size > to_size) {
         from_size--;
-        from_port_iter.next();
+        from_port_iter.PortNameBitIterator::next();
       }
       while (to_size > from_size) {
         to_size--;
         to_port_iter.next();
       }
       // make timing arcs
-      while (from_port_iter.hasNext() && to_port_iter.hasNext()) {
-        LibertyPort *from_port_bit = from_port_iter.next();
+      while (from_port_iter.PortNameBitIterator::hasNext() && to_port_iter.hasNext()) {
+        LibertyPort *from_port_bit = from_port_iter.PortNameBitIterator::next();
         LibertyPort *to_port_bit = to_port_iter.next();
         if (from_port_bit->direction()->isOutput())
           warn(1215, timing_line, "timing group from output port.");
         builder_.makeTimingArcs(cell, from_port_bit, to_port_bit,
-                                related_out_port, timing_attrs,
-                                timing_line);
+                                related_out_port, timing_attrs);
       }
     }
     else {
       // cross product
-      while (from_port_iter.hasNext()) {
-        LibertyPort *from_port_bit = from_port_iter.next();
+      while (from_port_iter.PortNameBitIterator::hasNext()) {
+        LibertyPort *from_port_bit = from_port_iter.PortNameBitIterator::next();
         LibertyPortMemberIterator to_port_iter(to_port);
         while (to_port_iter.hasNext()) {
           LibertyPort *to_port_bit = to_port_iter.next();
           builder_.makeTimingArcs(cell, from_port_bit, to_port_bit,
-                                  related_out_port, timing_attrs,
-                                  timing_line);
+                                  related_out_port, timing_attrs);
         }
       }
     }
@@ -2671,28 +2674,25 @@ void
 LibertyReader::makeTimingArcs(LibertyCell *cell,
                               LibertyPort *to_port,
                               LibertyPort *related_out_port,
-                              TimingArcAttrsPtr timing_attrs,
-                              int timing_line)
+                              const TimingArcAttrsPtr &timing_attrs)
 {
   if (to_port->hasMembers()) {
     LibertyPortMemberIterator bit_iter(to_port);
     while (bit_iter.hasNext()) {
       LibertyPort *to_port_bit = bit_iter.next();
       builder_.makeTimingArcs(cell, nullptr, to_port_bit,
-                              related_out_port, timing_attrs,
-                              timing_line);
+                              related_out_port, timing_attrs);
     }
   }
   else
     builder_.makeTimingArcs(cell, nullptr, to_port,
-                            related_out_port, timing_attrs,
-                            timing_line);
+                            related_out_port, timing_attrs);
 }
 
 ////////////////////////////////////////////////////////////////
 
 void
-LibertyReader::readLeagageGrouops(LibertyCell *cell,
+LibertyReader::readLeakageGrouops(LibertyCell *cell,
                                   const LibertyGroup *cell_group)
 {
   for (const LibertyGroup *leak_group : cell_group->findSubgroups("leakage_power")) {
@@ -3556,12 +3556,7 @@ PortNameBitIterator::PortNameBitIterator(LibertyCell *cell,
                                          int line) :
   cell_(cell),
   visitor_(visitor),
-  line_(line),
-  port_(nullptr),
-  bit_iterator_(nullptr),
-  range_bus_port_(nullptr),
-  range_name_next_(nullptr),
-  size_(0)
+  line_(line)
 {
   init(port_name);
 }
@@ -3833,5 +3828,4 @@ filterLiberty(const char* filename, StaState *sta)
   parseLibertyFile(filename, &library_visitor, sta->report());
 }
 
-
-} // namespace
+} // namespace sta

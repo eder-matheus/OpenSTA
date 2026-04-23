@@ -39,4 +39,4 @@ void
 filterLiberty(const char* filename,
               StaState *sta);
 
-} // namespace
+} // namespace sta
