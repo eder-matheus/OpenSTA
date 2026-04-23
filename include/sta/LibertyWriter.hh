@@ -39,4 +39,8 @@ void
 filterLiberty(const char* filename,
               StaState *sta);
 
+void
+reduceLiberty(const char* filename,
+              StaState *sta);
+
 } // namespace sta

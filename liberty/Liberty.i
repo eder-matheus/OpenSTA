@@ -138,6 +138,12 @@ filter_liberty_cmd(char* filename)
 }
 
 void
+reduce_liberty_cmd(char* filename)
+{
+  reduceLiberty(filename, Sta::sta());
+}
+
+void
 make_equiv_cells(LibertyLibrary *lib)
 {
   LibertyLibrarySeq libs;

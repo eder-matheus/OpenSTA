@@ -24,6 +24,7 @@
 
 #include "LibertyReader.hh"
 
+#include <algorithm>
 #include <cctype>
 #include <cstdlib>
 #include <functional>
@@ -31,7 +32,6 @@
 #include <set>
 #include <string>
 #include <string_view>
-#include <sstream>
 #include <utility>
 
 #include "ConcreteLibrary.hh"
@@ -3714,13 +3714,50 @@ public:
   virtual void visitAttr(const LibertyComplexAttr *attr);
   virtual void visitVariable(LibertyVariable *variable);
 
+protected:
+  virtual bool shouldSkip(const std::string &type) const;
+
 private:
-  std::string indent() const { return std::string(depth_, ' '); }
-  std::string asString(const LibertyAttrValue &value);
+  void writeIndent() const;
+  void writeValue(const LibertyAttrValue &value) const;
 
   const LibertyGroup *skip_group_{nullptr};
   int depth_ = 0;
 };
+
+bool FilterLibertyGroupVisitor::shouldSkip(const std::string &type) const
+{
+  return type == "normalized_driver_waveform"
+      || type.starts_with("output_current")
+      || type.starts_with("ocv")
+      || type.starts_with("output_ccb")
+      || type.starts_with("input_ccb")
+      || type.starts_with("receiver_capacitance");
+}
+
+// Liberty group nesting rarely exceeds ~8 levels; 256 spaces is a safe cap.
+// Emit in one fwrite so hot-path attr visits avoid per-call allocation.
+void FilterLibertyGroupVisitor::writeIndent() const
+{
+  static const std::string spaces(256, ' ');
+  size_t n = std::min(static_cast<size_t>(depth_), spaces.size());
+  fwrite(spaces.data(), 1, n, stdout);
+}
+
+void FilterLibertyGroupVisitor::writeValue(const LibertyAttrValue &value) const
+{
+  if (value.isFloat()) {
+    auto [fval, valid] = value.floatValue();
+    printf("%g", fval);
+  } else if (value.isString()) {
+    fputc('"', stdout);
+    fputs(value.stringValue().c_str(), stdout);
+    fputc('"', stdout);
+  } else {
+    printf("Unknown value\n");
+    exit(1);
+  }
+}
 
 void FilterLibertyGroupVisitor::begin(const LibertyGroup *group,
                                       LibertyGroup */*parent_group*/)
@@ -3731,27 +3768,23 @@ void FilterLibertyGroupVisitor::begin(const LibertyGroup *group,
   }
 
   const std::string &type = group->type();
-  if (type == "normalized_driver_waveform" ||
-      type.compare(0, 14, "output_current") == 0 ||
-      type.compare(0, 3, "ocv") == 0 ||
-      type.compare(0, 10, "output_ccb") == 0 ||
-      type.compare(0, 9, "input_ccb") == 0 ||
-      type.compare(0, 20, "receiver_capacitance") == 0) {
+  if (shouldSkip(type)) {
     skip_group_ = group;
     depth_ += 2;
     return;
   }
 
-  std::string name;
+  writeIndent();
+  fputs(type.c_str(), stdout);
+  fputs(" (", stdout);
   if (group->hasFirstParam()) {
-    name += group->firstParam();
+    fputs(group->firstParam().c_str(), stdout);
   }
   if (group->hasSecondParam()) {
-    name += ',';
-    name += group->secondParam();
+    fputc(',', stdout);
+    fputs(group->secondParam().c_str(), stdout);
   }
-
-  printf("%s%s (%s) {\n", indent().c_str(), type.c_str(), name.c_str());
+  fputs(") {\n", stdout);
   depth_ += 2;
 }
 
@@ -3760,61 +3793,43 @@ void FilterLibertyGroupVisitor::end(const LibertyGroup *group,
 {
   depth_ -= 2;
   if (skip_group_) {
-    if (skip_group_ == group) {
+    if (skip_group_ == group)
       skip_group_ = nullptr;
-    }
   } else {
-    printf("%s}\n", indent().c_str());
+    writeIndent();
+    fputs("}\n", stdout);
   }
   // Free the completed group from its parent to bound memory usage.
-  // All content has already been visited/printed by this point.
   if (parent_group)
     parent_group->deleteSubgroup(group);
 }
 
-std::string FilterLibertyGroupVisitor::asString(const LibertyAttrValue &value)
-{
-  std::ostringstream s;
-  if (value.isFloat()) {
-    auto [fval, valid] = value.floatValue();
-    s << fval;
-  } else if (value.isString()) {
-    s << '"' << value.stringValue() << '"';
-  } else {
-    printf("Unknown value\n");
-    exit(1);
-  }
-  return s.str();
-}
-
 void FilterLibertyGroupVisitor::visitAttr(const LibertySimpleAttr *attr)
 {
-  if (!skip_group_) {
-    std::ostringstream s;
-    s << indent();
-    s << attr->name() << " : " << asString(attr->value())
-      << ";";
-    printf("%s\n", s.str().c_str());
-  }
+  if (skip_group_)
+    return;
+  writeIndent();
+  fputs(attr->name().c_str(), stdout);
+  fputs(" : ", stdout);
+  writeValue(attr->value());
+  fputs(";\n", stdout);
 }
 
 void FilterLibertyGroupVisitor::visitAttr(const LibertyComplexAttr *attr)
 {
-  if (!skip_group_) {
-    std::ostringstream s;
-    s << indent();
-    bool first = true;
-    s << attr->name() << " (";
-    for (const auto *value : attr->values()) {
-      if (!first) {
-        s << ", ";
-      }
-      s << asString(*value);
-      first = false;
-    }
-    s << ");";
-    printf("%s\n", s.str().c_str());
+  if (skip_group_)
+    return;
+  writeIndent();
+  fputs(attr->name().c_str(), stdout);
+  fputs(" (", stdout);
+  bool first = true;
+  for (const auto *value : attr->values()) {
+    if (!first)
+      fputs(", ", stdout);
+    writeValue(*value);
+    first = false;
   }
+  fputs(");\n", stdout);
 }
 
 void FilterLibertyGroupVisitor::visitVariable(LibertyVariable */*variable*/)
@@ -3825,6 +3840,34 @@ void
 filterLiberty(const char* filename, StaState *sta)
 {
   FilterLibertyGroupVisitor library_visitor;
+  parseLibertyFile(filename, &library_visitor, sta->report());
+}
+
+//////////////////////////////////////////////////
+
+class ReduceLibertyGroupVisitor : public FilterLibertyGroupVisitor
+{
+protected:
+  bool shouldSkip(const std::string &type) const override;
+};
+
+bool ReduceLibertyGroupVisitor::shouldSkip(const std::string &type) const
+{
+  // CCB, ECSM, CCSN, and noise-analysis groups are tolerated by the parser
+  // but never consumed by LibertyReader, so they are pure overhead.
+  return type.starts_with("output_ccb")
+      || type.starts_with("input_ccb")
+      || type.starts_with("ecsm_")
+      || type.starts_with("ccsn_")
+      || type.starts_with("propagated_noise_")
+      || type.starts_with("noise_immunity_")
+      || type.starts_with("steady_state_");
+}
+
+void
+reduceLiberty(const char* filename, StaState *sta)
+{
+  ReduceLibertyGroupVisitor library_visitor;
   parseLibertyFile(filename, &library_visitor, sta->report());
 }
 
