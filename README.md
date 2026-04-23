@@ -250,6 +250,48 @@ OpenSTA is available in the [default repositories](https://hpc.guix.info/package
   guix install opensta
 ```
 
+## Liberty file utilities
+
+OpenSTA exposes two Tcl commands for preprocessing large Liberty (`.lib`)
+files. Both stream the input through the Liberty parser and print a
+rewritten Liberty on stdout, so they are typically used with shell
+redirection:
+
+```
+echo "reduce_liberty_cmd big.lib" > reduce.tcl
+sta -exit -no_splash -no_init reduce.tcl > big.reduced.lib
+```
+
+### `filter_liberty_cmd <filename>`
+
+Produces an NLDM-only version of the input. Groups dropped:
+`output_current*`, `receiver_capacitance*`, `normalized_driver_waveform`
+(CCS), `ocv*` (OCV derate / sigma tables), and `output_ccb*` /
+`input_ccb*` (CCB). Leaves the classic Non-Linear Delay Model tables
+and surrounding metadata intact. Useful when you want the smallest
+possible library for NLDM-only flows or quick experiments. Note: this
+command does not strip ECSM or signal-integrity noise groups — use
+`reduce_liberty_cmd` if you also want those removed.
+
+### `reduce_liberty_cmd <filename>`
+
+A less aggressive filter: it strips only the Liberty groups that STA
+cannot consume, and preserves every CCS/OCV construct that the STA
+reader actually parses. Groups removed:
+
+- `output_ccb*`, `input_ccb*` — cell current bias (Synopsys noise)
+- `ecsm_*` — ECSM waveform/capacitance groups (Cadence; tolerated but
+  never read by STA)
+- `ccsn_*` — CCS noise first/last stage
+- `propagated_noise_*`, `noise_immunity_*`, `steady_state_*` — signal
+  integrity noise analysis
+
+Groups preserved include `output_current_rise/fall`,
+`output_current_template`, `receiver_capacitance[1|2]`,
+`normalized_driver_waveform`, and all `ocv_*` derate / sigma data. This
+is the command to use when you want a smaller, faster-to-read Liberty
+without losing any timing accuracy that STA would otherwise have used.
+
 ## Bug Reports
 
 Use the Issues tab on the github repository to report bugs.
