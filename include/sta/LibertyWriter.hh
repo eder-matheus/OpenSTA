@@ -36,11 +36,13 @@ writeLiberty(LibertyLibrary *lib,
              StaState *sta);
 
 void
-filterLiberty(const char* filename,
+filterLiberty(const char *input_filename,
+              const char *output_filename,
               StaState *sta);
 
 void
-reduceLiberty(const char* filename,
+reduceLiberty(const char *input_filename,
+              const char *output_filename,
               StaState *sta);
 
 } // namespace sta

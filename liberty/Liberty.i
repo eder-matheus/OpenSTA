@@ -132,15 +132,17 @@ write_liberty_cmd(LibertyLibrary *library,
 }
 
 void
-filter_liberty_cmd(char* filename)
+filter_liberty_cmd(char *input_filename,
+                   char *output_filename)
 {
-  filterLiberty(filename, Sta::sta());
+  filterLiberty(input_filename, output_filename, Sta::sta());
 }
 
 void
-reduce_liberty_cmd(char* filename)
+reduce_liberty_cmd(char *input_filename,
+                   char *output_filename)
 {
-  reduceLiberty(filename, Sta::sta());
+  reduceLiberty(input_filename, output_filename, Sta::sta());
 }
 
 void

@@ -25,6 +25,7 @@
 #include "LibertyReader.hh"
 
 #include <algorithm>
+#include <array>
 #include <cctype>
 #include <cstdlib>
 #include <functional>
@@ -39,7 +40,9 @@
 #include "Debug.hh"
 #include "EnumNameMap.hh"
 #include "EquivCells.hh"
+#include "Error.hh"
 #include "Format.hh"
+#include "Report.hh"
 #include "FuncExpr.hh"
 #include "InternalPower.hh"
 #include "LibExprReader.hh"
@@ -3706,6 +3709,8 @@ OutputWaveform::releaseCurrents()
 class FilterLibertyGroupVisitor : public LibertyGroupVisitor
 {
 public:
+  explicit FilterLibertyGroupVisitor(FILE *out) : out_(out) {}
+
   virtual void begin(const LibertyGroup *group,
                      LibertyGroup *parent_group);
   virtual void end(const LibertyGroup *group,
@@ -3716,11 +3721,13 @@ public:
 
 protected:
   virtual bool shouldSkip(const std::string &type) const;
+  FILE *out() const { return out_; }
 
 private:
   void writeIndent() const;
   void writeValue(const LibertyAttrValue &value) const;
 
+  FILE *out_;  // not owned
   const LibertyGroup *skip_group_{nullptr};
   int depth_ = 0;
 };
@@ -3741,20 +3748,20 @@ void FilterLibertyGroupVisitor::writeIndent() const
 {
   static const std::string spaces(256, ' ');
   size_t n = std::min(static_cast<size_t>(depth_), spaces.size());
-  fwrite(spaces.data(), 1, n, stdout);
+  fwrite(spaces.data(), 1, n, out_);
 }
 
 void FilterLibertyGroupVisitor::writeValue(const LibertyAttrValue &value) const
 {
   if (value.isFloat()) {
     auto [fval, valid] = value.floatValue();
-    printf("%g", fval);
+    fprintf(out_, "%g", fval);
   } else if (value.isString()) {
-    fputc('"', stdout);
-    fputs(value.stringValue().c_str(), stdout);
-    fputc('"', stdout);
+    fputc('"', out_);
+    fputs(value.stringValue().c_str(), out_);
+    fputc('"', out_);
   } else {
-    printf("Unknown value\n");
+    fputs("Unknown value\n", stderr);
     exit(1);
   }
 }
@@ -3775,16 +3782,16 @@ void FilterLibertyGroupVisitor::begin(const LibertyGroup *group,
   }
 
   writeIndent();
-  fputs(type.c_str(), stdout);
-  fputs(" (", stdout);
+  fputs(type.c_str(), out_);
+  fputs(" (", out_);
   if (group->hasFirstParam()) {
-    fputs(group->firstParam().c_str(), stdout);
+    fputs(group->firstParam().c_str(), out_);
   }
   if (group->hasSecondParam()) {
-    fputc(',', stdout);
-    fputs(group->secondParam().c_str(), stdout);
+    fputc(',', out_);
+    fputs(group->secondParam().c_str(), out_);
   }
-  fputs(") {\n", stdout);
+  fputs(") {\n", out_);
   depth_ += 2;
 }
 
@@ -3797,7 +3804,7 @@ void FilterLibertyGroupVisitor::end(const LibertyGroup *group,
       skip_group_ = nullptr;
   } else {
     writeIndent();
-    fputs("}\n", stdout);
+    fputs("}\n", out_);
   }
   // Free the completed group from its parent to bound memory usage.
   if (parent_group)
@@ -3809,10 +3816,10 @@ void FilterLibertyGroupVisitor::visitAttr(const LibertySimpleAttr *attr)
   if (skip_group_)
     return;
   writeIndent();
-  fputs(attr->name().c_str(), stdout);
-  fputs(" : ", stdout);
+  fputs(attr->name().c_str(), out_);
+  fputs(" : ", out_);
   writeValue(attr->value());
-  fputs(";\n", stdout);
+  fputs(";\n", out_);
 }
 
 void FilterLibertyGroupVisitor::visitAttr(const LibertyComplexAttr *attr)
@@ -3820,16 +3827,16 @@ void FilterLibertyGroupVisitor::visitAttr(const LibertyComplexAttr *attr)
   if (skip_group_)
     return;
   writeIndent();
-  fputs(attr->name().c_str(), stdout);
-  fputs(" (", stdout);
+  fputs(attr->name().c_str(), out_);
+  fputs(" (", out_);
   bool first = true;
   for (const auto *value : attr->values()) {
     if (!first)
-      fputs(", ", stdout);
+      fputs(", ", out_);
     writeValue(*value);
     first = false;
   }
-  fputs(");\n", stdout);
+  fputs(");\n", out_);
 }
 
 void FilterLibertyGroupVisitor::visitVariable(LibertyVariable */*variable*/)
@@ -3837,18 +3844,66 @@ void FilterLibertyGroupVisitor::visitVariable(LibertyVariable */*variable*/)
 }
 
 void
-filterLiberty(const char* filename, StaState *sta)
+filterLiberty(const char *input_filename,
+              const char *output_filename,
+              StaState *sta)
 {
-  FilterLibertyGroupVisitor library_visitor;
-  parseLibertyFile(filename, &library_visitor, sta->report());
+  std::unique_ptr<FILE, int(*)(FILE*)> out(fopen(output_filename, "w"),
+                                           &fclose);
+  if (!out)
+    throw FileNotWritable(output_filename);
+  FilterLibertyGroupVisitor library_visitor(out.get());
+  parseLibertyFile(input_filename, &library_visitor, sta->report());
 }
 
 //////////////////////////////////////////////////
 
 class ReduceLibertyGroupVisitor : public FilterLibertyGroupVisitor
 {
+public:
+  using FilterLibertyGroupVisitor::FilterLibertyGroupVisitor;
+
+  void begin(const LibertyGroup *group,
+             LibertyGroup *parent_group) override;
+  void end(const LibertyGroup *group,
+           LibertyGroup *parent_group) override;
+  void visitAttr(const LibertySimpleAttr *attr) override;
+  void visitAttr(const LibertyComplexAttr *attr) override;
+
+  void printReport(Report *report) const;
+
 protected:
   bool shouldSkip(const std::string &type) const override;
+
+private:
+  enum class Category {
+    Other = 0,
+    NLDM,
+    CCSTiming,
+    CCSPower,
+    CCSNoise,
+    CCB,
+    ECSM,
+    EM,
+    OCV,
+    Power,
+    COUNT
+  };
+  static constexpr size_t kNumCategories =
+      static_cast<size_t>(Category::COUNT);
+
+  struct Stat { size_t bytes = 0; size_t groups = 0; size_t values = 0; };
+
+  static Category categorize(const std::string &type);
+  static size_t valueBytes(const LibertyAttrValue &value);
+  static size_t simpleAttrBytes(const LibertySimpleAttr *attr);
+  static size_t complexAttrBytes(const LibertyComplexAttr *attr);
+
+  std::array<Stat, kNumCategories> stats_{};
+  // Outermost-categorized-ancestor wins: a single active marker is enough
+  // because we only push when no category is active.
+  Category active_category_{Category::Other};
+  const LibertyGroup *active_group_{nullptr};
 };
 
 bool ReduceLibertyGroupVisitor::shouldSkip(const std::string &type) const
@@ -3883,11 +3938,191 @@ bool ReduceLibertyGroupVisitor::shouldSkip(const std::string &type) const
       || type.starts_with("compact_ccs_");
 }
 
-void
-reduceLiberty(const char* filename, StaState *sta)
+ReduceLibertyGroupVisitor::Category
+ReduceLibertyGroupVisitor::categorize(const std::string &type)
 {
-  ReduceLibertyGroupVisitor library_visitor;
-  parseLibertyFile(filename, &library_visitor, sta->report());
+  // CCS power — checked before generic "compact_ccs_" so compact_ccs_power*
+  // doesn't fall into CCS Timing.
+  if (type.starts_with("dynamic_current")
+      || type.starts_with("pg_current")
+      || type.starts_with("dc_current")
+      || type.starts_with("gate_leakage")
+      || type.starts_with("intrinsic_parasitic")
+      || type.starts_with("lower_pg_simple")
+      || type.starts_with("upper_pg_simple")
+      || type.starts_with("compact_ccs_power"))
+    return Category::CCSPower;
+  if (type.starts_with("ccsn_")
+      || type.starts_with("propagated_noise_")
+      || type.starts_with("noise_immunity_")
+      || type.starts_with("hyperbolic_noise_")
+      || type.starts_with("steady_state_"))
+    return Category::CCSNoise;
+  if (type.starts_with("output_ccb")
+      || type.starts_with("input_ccb")
+      || type.starts_with("propagating_ccb"))
+    return Category::CCB;
+  if (type.starts_with("ecsm_"))
+    return Category::ECSM;
+  if (type.starts_with("output_current")
+      || type.starts_with("receiver_capacitance")
+      || type == "normalized_driver_waveform"
+      || type.starts_with("compact_ccs_"))
+    return Category::CCSTiming;
+  if (type.starts_with("em_max_") || type.starts_with("em_lut_"))
+    return Category::EM;
+  if (type.starts_with("ocv"))
+    return Category::OCV;
+  if (type == "internal_power" || type == "leakage_power" || type == "pg_pin")
+    return Category::Power;
+  if (type == "cell_rise" || type == "cell_fall"
+      || type == "rise_transition" || type == "fall_transition"
+      || type == "rise_constraint" || type == "fall_constraint"
+      || type == "retaining_rise" || type == "retaining_fall"
+      || type == "retain_rise_slew" || type == "retain_fall_slew")
+    return Category::NLDM;
+  return Category::Other;
+}
+
+size_t
+ReduceLibertyGroupVisitor::valueBytes(const LibertyAttrValue &value)
+{
+  if (value.isFloat())
+    return 10;  // approximate "%g" output width
+  if (value.isString())
+    return value.stringValue().size() + 2;
+  return 0;
+}
+
+size_t
+ReduceLibertyGroupVisitor::simpleAttrBytes(const LibertySimpleAttr *attr)
+{
+  return attr->name().size() + 4 + valueBytes(attr->value());
+}
+
+size_t
+ReduceLibertyGroupVisitor::complexAttrBytes(const LibertyComplexAttr *attr)
+{
+  size_t bytes = attr->name().size() + 6;
+  bool first = true;
+  for (const auto *value : attr->values()) {
+    if (!first) bytes += 2;
+    bytes += valueBytes(*value);
+    first = false;
+  }
+  return bytes;
+}
+
+void ReduceLibertyGroupVisitor::begin(const LibertyGroup *group,
+                                      LibertyGroup *parent_group)
+{
+  if (!active_group_) {
+    Category cat = categorize(group->type());
+    if (cat != Category::Other) {
+      active_category_ = cat;
+      active_group_ = group;
+    }
+  }
+  size_t bytes = group->type().size() + 4;
+  if (group->hasFirstParam()) bytes += group->firstParam().size() + 1;
+  if (group->hasSecondParam()) bytes += group->secondParam().size() + 1;
+  Stat &s = stats_[static_cast<size_t>(active_category_)];
+  s.bytes += bytes;
+  s.groups += 1;
+  FilterLibertyGroupVisitor::begin(group, parent_group);
+}
+
+void ReduceLibertyGroupVisitor::end(const LibertyGroup *group,
+                                    LibertyGroup *parent_group)
+{
+  if (active_group_ == group) {
+    active_category_ = Category::Other;
+    active_group_ = nullptr;
+  }
+  FilterLibertyGroupVisitor::end(group, parent_group);
+}
+
+void ReduceLibertyGroupVisitor::visitAttr(const LibertySimpleAttr *attr)
+{
+  Stat &s = stats_[static_cast<size_t>(active_category_)];
+  s.bytes += simpleAttrBytes(attr);
+  s.values += 1;
+  FilterLibertyGroupVisitor::visitAttr(attr);
+}
+
+void ReduceLibertyGroupVisitor::visitAttr(const LibertyComplexAttr *attr)
+{
+  Stat &s = stats_[static_cast<size_t>(active_category_)];
+  s.bytes += complexAttrBytes(attr);
+  s.values += attr->values().size();
+  FilterLibertyGroupVisitor::visitAttr(attr);
+}
+
+void ReduceLibertyGroupVisitor::printReport(Report *report) const
+{
+  size_t total_bytes = 0;
+  for (const Stat &s : stats_)
+    total_bytes += s.bytes;
+  if (total_bytes == 0)
+    return;
+
+  struct Row { Category cat; const char *name; const char *status; };
+  static const Row rows[] = {
+    {Category::NLDM,      "NLDM",       "kept"},
+    {Category::CCSTiming, "CCS Timing", "kept"},
+    {Category::OCV,       "OCV",        "kept"},
+    {Category::Power,     "Power",      "kept"},
+    {Category::CCSPower,  "CCS Power",  "stripped"},
+    {Category::CCSNoise,  "CCS Noise",  "stripped"},
+    {Category::ECSM,      "ECSM",       "stripped"},
+    {Category::CCB,       "CCB",        "stripped"},
+    {Category::EM,        "EM",         "stripped"},
+    {Category::Other,     "Other",      "kept"},
+  };
+
+  auto humanize = [](size_t b) {
+    constexpr double KB = 1024.0;
+    constexpr double MB = KB * 1024.0;
+    constexpr double GB = MB * 1024.0;
+    double bytes = static_cast<double>(b);
+    if (bytes >= GB) return sta::format("{:.2f} GB", bytes / GB);
+    if (bytes >= MB) return sta::format("{:.2f} MB", bytes / MB);
+    if (bytes >= KB) return sta::format("{:.2f} KB", bytes / KB);
+    return sta::format("{} B", b);
+  };
+
+  report->reportLine("=== reduce_liberty_cmd input distribution ===");
+  report->reportLine(sta::format("  {:<12} {:<9} {:>12} {:>8} {:>14}",
+                                 "Category", "Status", "Approx size",
+                                 "Share", "Data points"));
+  for (const Row &row : rows) {
+    const Stat &s = stats_[static_cast<size_t>(row.cat)];
+    if (s.bytes == 0)
+      continue;
+    double pct = 100.0 * static_cast<double>(s.bytes)
+                 / static_cast<double>(total_bytes);
+    report->reportLine(sta::format("  {:<12} {:<9} {:>12} {:>7.2f}% {:>14}",
+                                   row.name, row.status, humanize(s.bytes),
+                                   pct, s.values));
+  }
+  report->reportLine("  ---------------------------------------------------");
+  report->reportLine(sta::format("  {:<12} {:<9} {:>12} {:>7.2f}%",
+                                 "Total", "", humanize(total_bytes), 100.0));
+  report->reportLine("==============================================");
+}
+
+void
+reduceLiberty(const char *input_filename,
+              const char *output_filename,
+              StaState *sta)
+{
+  std::unique_ptr<FILE, int(*)(FILE*)> out(fopen(output_filename, "w"),
+                                           &fclose);
+  if (!out)
+    throw FileNotWritable(output_filename);
+  ReduceLibertyGroupVisitor library_visitor(out.get());
+  parseLibertyFile(input_filename, &library_visitor, sta->report());
+  library_visitor.printReport(sta->report());
 }
 
 } // namespace sta

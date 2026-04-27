@@ -253,16 +253,15 @@ OpenSTA is available in the [default repositories](https://hpc.guix.info/package
 ## Liberty file utilities
 
 OpenSTA exposes two Tcl commands for preprocessing large Liberty (`.lib`)
-files. Both stream the input through the Liberty parser and print a
-rewritten Liberty on stdout, so they are typically used with shell
-redirection:
+files. Both stream the input through the Liberty parser and write a
+rewritten Liberty to a file given as the second argument:
 
 ```
-echo "reduce_liberty_cmd big.lib" > reduce.tcl
-sta -exit -no_splash -no_init reduce.tcl > big.reduced.lib
+echo "reduce_liberty_cmd big.lib big.reduced.lib" > reduce.tcl
+sta -exit -no_splash -no_init reduce.tcl
 ```
 
-### `filter_liberty_cmd <filename>`
+### `filter_liberty_cmd <input> <output>`
 
 Produces an NLDM-only version of the input. Groups dropped:
 `output_current*`, `receiver_capacitance*`, `normalized_driver_waveform`
@@ -273,7 +272,7 @@ possible library for NLDM-only flows or quick experiments. Note: this
 command does not strip ECSM or signal-integrity noise groups — use
 `reduce_liberty_cmd` if you also want those removed.
 
-### `reduce_liberty_cmd <filename>`
+### `reduce_liberty_cmd <input> <output>`
 
 A less aggressive filter: it strips only the Liberty groups that STA
 cannot consume, and preserves every CCS/OCV construct that the STA
@@ -296,6 +295,15 @@ derate / sigma tables, and the power groups STA does consume (`pg_pin`,
 `leakage_power`, `internal_power`). This is the command to use when you
 want a smaller, faster-to-read Liberty without losing any timing
 accuracy that STA would otherwise have used.
+
+After parsing, `reduce_liberty_cmd` prints a diagnostic report through
+STA's standard logger that breaks down the input by category (NLDM,
+CCS Timing, CCS Power, CCS Noise, ECSM, CCB, EM, OCV, Power, Other)
+showing approximate size, share of total, and number of data points
+per category. This tells you where the file's bulk actually lives —
+useful when the reduced output is still larger than expected. The
+report can be captured via Tcl `redirect_file_begin` / `redirect_file_end`
+or the usual logging mechanisms.
 
 ## Bug Reports
 
