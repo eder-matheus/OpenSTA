@@ -279,18 +279,23 @@ A less aggressive filter: it strips only the Liberty groups that STA
 cannot consume, and preserves every CCS/OCV construct that the STA
 reader actually parses. Groups removed:
 
-- `output_ccb*`, `input_ccb*` — cell current bias (Synopsys noise)
-- `ecsm_*` — ECSM waveform/capacitance groups (Cadence; tolerated but
-  never read by STA)
-- `ccsn_*` — CCS noise first/last stage
-- `propagated_noise_*`, `noise_immunity_*`, `steady_state_*` — signal
-  integrity noise analysis
+- CCB (cell current bias, for noise): `output_ccb*`, `input_ccb*`,
+  `propagating_ccb*`
+- CCS power: `dynamic_current*`, `pg_current*`, `dc_current*`,
+  `gate_leakage*`, `intrinsic_parasitic*`, `lower_pg_simple*`,
+  `upper_pg_simple*`, `compact_ccs_*`
+- CCS noise: `ccsn_*`, `propagated_noise_*`, `noise_immunity_*`,
+  `steady_state_*`, `hyperbolic_noise_*`
+- ECSM (Cadence): `ecsm_*`
+- Electromigration: `em_max_*`, `em_lut_*`
 
-Groups preserved include `output_current_rise/fall`,
-`output_current_template`, `receiver_capacitance[1|2]`,
-`normalized_driver_waveform`, and all `ocv_*` derate / sigma data. This
-is the command to use when you want a smaller, faster-to-read Liberty
-without losing any timing accuracy that STA would otherwise have used.
+Groups preserved include the CCS timing data STA actually reads
+(`output_current_rise/fall`, `output_current_template`,
+`receiver_capacitance[1|2]`, `normalized_driver_waveform`), all `ocv_*`
+derate / sigma tables, and the power groups STA does consume (`pg_pin`,
+`leakage_power`, `internal_power`). This is the command to use when you
+want a smaller, faster-to-read Liberty without losing any timing
+accuracy that STA would otherwise have used.
 
 ## Bug Reports
 

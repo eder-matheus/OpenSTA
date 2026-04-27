@@ -3853,15 +3853,34 @@ protected:
 
 bool ReduceLibertyGroupVisitor::shouldSkip(const std::string &type) const
 {
-  // CCB, ECSM, CCSN, and noise-analysis groups are tolerated by the parser
-  // but never consumed by LibertyReader, so they are pure overhead.
-  return type.starts_with("output_ccb")
+  // Groups tolerated by the parser but never consumed by LibertyReader.
+  // Categories: CCB, CCS power, ECSM, CCS noise, EM, compact CCS.
+  return
+      // CCB (cell current bias for noise) — frequent per timing arc
+         type.starts_with("output_ccb")
       || type.starts_with("input_ccb")
+      || type.starts_with("propagating_ccb")
+      // CCS power — typically the largest unused chunk in modern libs
+      || type.starts_with("dynamic_current")
+      || type.starts_with("pg_current")
+      || type.starts_with("dc_current")
+      || type.starts_with("gate_leakage")
+      || type.starts_with("intrinsic_parasitic")
+      || type.starts_with("lower_pg_simple")
+      || type.starts_with("upper_pg_simple")
+      // ECSM (Cadence alternative to CCS)
       || type.starts_with("ecsm_")
+      // CCS noise
       || type.starts_with("ccsn_")
       || type.starts_with("propagated_noise_")
       || type.starts_with("noise_immunity_")
-      || type.starts_with("steady_state_");
+      || type.starts_with("hyperbolic_noise_")
+      || type.starts_with("steady_state_")
+      // Electromigration / DC characterization
+      || type.starts_with("em_max_")
+      || type.starts_with("em_lut_")
+      // Compact CCS (power and timing variants — STA reads neither)
+      || type.starts_with("compact_ccs_");
 }
 
 void
