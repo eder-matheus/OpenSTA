@@ -41,6 +41,11 @@
 
 namespace sta {
 
+// Flex's default YY_BUF_SIZE is 16 KB. Multi-GB Liberty files refill
+// the scanner buffer millions of times at that size; a 1 MB buffer
+// cuts refills by ~64x while still fitting comfortably in L2.
+static constexpr int kScannerBufferSize = 1 << 20;
+
 void
 parseLibertyFile(std::string_view filename,
                  LibertyGroupVisitor *library_visitor,
@@ -240,6 +245,10 @@ LibertyScanner::LibertyScanner(std::istream *stream,
   reader_(reader),
   report_(report)
 {
+  // Replace Flex's default 16 KB buffer with a larger one. Multi-GB
+  // Liberty files would otherwise refill the buffer millions of times.
+  yypop_buffer_state();
+  yypush_buffer_state(yy_create_buffer(stream, kScannerBufferSize));
 }
 
 bool
@@ -255,7 +264,7 @@ LibertyScanner::includeBegin()
       std::string filename = matches[1].str();
       gzstream::igzstream *stream = new gzstream::igzstream(filename.c_str());
       if (stream->is_open()) {
-        yypush_buffer_state(yy_create_buffer(stream, 16384));
+        yypush_buffer_state(yy_create_buffer(stream, kScannerBufferSize));
 
         filename_prev_ = filename_;
         stream_prev_ = stream_;
