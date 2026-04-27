@@ -73,8 +73,8 @@ sta::LibertyParse::error(const location_type &loc,
 %left '!'
 
 %type <void *> statement complex_attr simple_attr variable group file
-%type <sta::LibertyAttrValueSeq *> attr_values
-%type <sta::LibertyAttrValue *> attr_value
+%type <sta::LibertyAttrValueSeq> attr_values
+%type <sta::LibertyAttrValue> attr_value
 %type <std::string> string expr expr_term expr_term1 volt_expr
 %type <char> expr_op volt_op
 
@@ -88,19 +88,19 @@ file:
 
 group:
 	KEYWORD '(' ')' '{'
-	{ reader->groupBegin(std::move($1), nullptr, loc_line(@1)); }
+	{ reader->groupBegin(std::move($1), sta::LibertyAttrValueSeq{}, loc_line(@1)); }
 	'}' semi_opt
 	{ $$ = reader->groupEnd(); }
 |	KEYWORD '(' ')' '{'
-	{ reader->groupBegin(std::move($1), nullptr, loc_line(@1)); }
+	{ reader->groupBegin(std::move($1), sta::LibertyAttrValueSeq{}, loc_line(@1)); }
 	statements '}' semi_opt
 	{ $$ = reader->groupEnd(); }
 |	KEYWORD '(' attr_values ')' '{'
-	{ reader->groupBegin(std::move($1), $3, loc_line(@1)); }
+	{ reader->groupBegin(std::move($1), std::move($3), loc_line(@1)); }
 	'}' semi_opt
 	{ $$ = reader->groupEnd(); }
 |	KEYWORD '(' attr_values ')' '{'
-	{ reader->groupBegin(std::move($1), $3, loc_line(@1)); }
+	{ reader->groupBegin(std::move($1), std::move($3), loc_line(@1)); }
 	statements '}' semi_opt
 	{ $$ = reader->groupEnd(); }
 	;
@@ -119,28 +119,26 @@ statement:
 
 simple_attr:
 	KEYWORD ':' attr_value semi_opt
-	{ $$ = reader->makeSimpleAttr(std::move($1), $3, loc_line(@1)); }
+	{ $$ = reader->makeSimpleAttr(std::move($1), std::move($3), loc_line(@1)); }
 	;
 
 complex_attr:
 	KEYWORD '(' ')' semi_opt
-	{ $$ = reader->makeComplexAttr(std::move($1), nullptr, loc_line(@1)); }
+	{ $$ = reader->makeComplexAttr(std::move($1), sta::LibertyAttrValueSeq{}, loc_line(@1)); }
 |	KEYWORD '(' attr_values ')' semi_opt
-	{ $$ = reader->makeComplexAttr(std::move($1), $3, loc_line(@1)); }
+	{ $$ = reader->makeComplexAttr(std::move($1), std::move($3), loc_line(@1)); }
 	;
 
 attr_values:
 	attr_value
-	{ $$ = new sta::LibertyAttrValueSeq;
-	  $$->push_back($1);
-	}
+	{ $$.push_back(std::move($1)); }
 |	attr_values ',' attr_value
-        { $1->push_back($3);
-	  $$ = $1;
+	{ $$ = std::move($1);
+	  $$.push_back(std::move($3));
 	}
 |	attr_values attr_value
-        { $1->push_back($2);
-	  $$ = $1;
+	{ $$ = std::move($1);
+	  $$.push_back(std::move($2));
 	}
 	;
 

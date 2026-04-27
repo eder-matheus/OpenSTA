@@ -350,10 +350,10 @@ LibertyReader::readLibraryUnits(const LibertyGroup *library_group)
   if (cap_attr) {
     const LibertyAttrValueSeq &values = cap_attr->values();
     if (values.size() == 2) {
-      LibertyAttrValue *value = values[0];
+      const LibertyAttrValue *value = &values[0];
       auto [scale, valid] = value->floatValue();
       if (valid) {
-        value = values[1];
+        value = &values[1];
         if (value->isString()) {
           const std::string suffix = value->stringValue();
           if (stringEqual(suffix, "ff"))
@@ -632,8 +632,8 @@ LibertyReader::readVoltateMaps(const LibertyGroup *library_group)
          library_group->findComplexAttrs("voltage_map")) {
     const LibertyAttrValueSeq &values = volt_attr->values();
     if (values.size() == 2) {
-      const std::string &volt_name = values[0]->stringValue();
-      auto [volt, valid] = values[1]->floatValue();
+      const std::string &volt_name = values[0].stringValue();
+      auto [volt, valid] = values[1].floatValue();
       if (valid)
         library_->addSupplyVoltage(volt_name, volt);
       else
@@ -788,13 +788,13 @@ LibertyReader::readWireloadSelection(const LibertyGroup *library_group)
            sel_group->findComplexAttrs("wire_load_from_area")) {
       const LibertyAttrValueSeq &values = area_attr->values();
       if (values.size() == 3) {
-        auto [min_area, min_valid] = values[0]->floatValue();
+        auto [min_area, min_valid] = values[0].floatValue();
         if (min_valid) {
-          auto [max_area, max_valid] = values[1]->floatValue();
+          auto [max_area, max_valid] = values[1].floatValue();
           if (max_valid) {
-            LibertyAttrValue *value = values[2];
-            if (value->isString()) {
-              const std::string &wireload_name = value->stringValue();
+            const LibertyAttrValue &value = values[2];
+            if (value.isString()) {
+              const std::string &wireload_name = value.stringValue();
               const Wireload *wireload =
                 library_->findWireload(wireload_name);
               if (wireload)
@@ -1082,8 +1082,8 @@ LibertyReader::makePinPort(LibertyCell *cell,
                            const LibertyGroup *pin_group,
                            LibertyPortGroupMap &port_group_map)
 {
-  for (const LibertyAttrValue *port_value : pin_group->params()) {
-    const std::string &port_name = port_value->stringValue();
+  for (const LibertyAttrValue &port_value : pin_group->params()) {
+    const std::string &port_name = port_value.stringValue();
     LibertyPort *port = makePort(cell, port_name);
     port_group_map[pin_group].push_back(port);
   }
@@ -1094,8 +1094,8 @@ LibertyReader::makeBusPort(LibertyCell *cell,
                            const LibertyGroup *bus_group,
                            LibertyPortGroupMap &port_group_map)
 {
-  for (const LibertyAttrValue *port_value : bus_group->params()) {
-    const std::string &port_name = port_value->stringValue();
+  for (const LibertyAttrValue &port_value : bus_group->params()) {
+    const std::string &port_name = port_value.stringValue();
     const LibertySimpleAttr *bus_type_attr = bus_group->findSimpleAttr("bus_type");
     if (bus_type_attr) {
       const std::string &bus_type = bus_type_attr->stringValue();
@@ -1128,9 +1128,9 @@ LibertyReader::makeBusPinPorts(LibertyCell *cell,
                                LibertyPortGroupMap &port_group_map)
 {
   for (const LibertyGroup *pin_group : bus_group->findSubgroups("pin")) {
-    for (const LibertyAttrValue *param : pin_group->params()) {
-      if (param->isString()) {
-        const std::string pin_name = param->stringValue();
+    for (const LibertyAttrValue &param : pin_group->params()) {
+      if (param.isString()) {
+        const std::string pin_name = param.stringValue();
         debugPrint(debug_, "liberty", 1, " bus pin port {}", pin_name);
         // Expand foo[3:0] port names.
         PortNameBitIterator name_iter(cell, pin_name, this, pin_group->line());
@@ -1160,9 +1160,9 @@ LibertyReader::makeBundlePort(LibertyCell *cell,
     
     const LibertyComplexAttr *member_attr = bundle_group->findComplexAttr("members");
     ConcretePortSeq *members = new ConcretePortSeq;
-    for (const LibertyAttrValue *member_value : member_attr->values()) {
-      if (member_value->isString()) {
-        const std::string &member_name = member_value->stringValue();
+    for (const LibertyAttrValue &member_value : member_attr->values()) {
+      if (member_value.isString()) {
+        const std::string &member_name = member_value.stringValue();
         LibertyPort *member = cell->findLibertyPort(member_name);
         if (member == nullptr)
           member = makePort(cell, member_name);
@@ -1184,9 +1184,9 @@ LibertyReader::makeBundlePinPorts(LibertyCell *cell,
                                   LibertyPortGroupMap &port_group_map)
 {
   for (const LibertyGroup *pin_group : bundle_group->findSubgroups("pin")) {
-    for (LibertyAttrValue *param : pin_group->params()) {
-      if (param->isString()) {
-        const std::string pin_name = param->stringValue();
+    for (const LibertyAttrValue &param : pin_group->params()) {
+      if (param.isString()) {
+        const std::string pin_name = param.stringValue();
         debugPrint(debug_, "liberty", 1, " bundle pin port {}", pin_name);
         LibertyPort *pin_port = cell->findLibertyPort(pin_name);
         if (pin_port == nullptr)
@@ -1522,10 +1522,10 @@ LibertyReader::readCapacitance(const LibertyPortSeq &ports,
         const LibertyComplexAttr *attr = range_attrs[0];
         const LibertyAttrValueSeq &values = attr->values();
         if (values.size() == 2) {
-          auto [cap_min, min_valid] = values[0]->floatValue();
+          auto [cap_min, min_valid] = values[0].floatValue();
           if (min_valid)
             port->setCapacitance(rf, MinMax::min(), cap_min * cap_scale_);
-          auto [cap_max, max_valid] = values[1]->floatValue();
+          auto [cap_max, max_valid] = values[1].floatValue();
           if (max_valid)
             port->setCapacitance(rf, MinMax::max(), cap_max * cap_scale_);
         }
@@ -1778,8 +1778,8 @@ LibertyReader::seqPortNames(const LibertyGroup *group,
     size = 1;
   }
   else if (param_count == 3) {
-    LibertyAttrValue *third_value = group->params()[2];
-    auto [size_flt, size_valid] = third_value->floatValue();
+    const LibertyAttrValue &third_value = group->params()[2];
+    auto [size_flt, size_valid] = third_value.floatValue();
     if (size_valid) {
       // out_port, out_port_inv, bus_size
       out_name = group->firstParam();
@@ -1790,7 +1790,7 @@ LibertyReader::seqPortNames(const LibertyGroup *group,
     else {
       // in_port (ignored), out_port, out_port_inv
       out_name = group->secondParam();
-      out_inv_name = third_value->stringValue();
+      out_inv_name = third_value.stringValue();
       has_size = true;
       size = 1;
     }
@@ -2061,13 +2061,13 @@ LibertyReader::readTimingMode(const LibertyGroup *timing_group,
     const LibertyComplexAttr *mode_attr = mode_attrs[0];
     const LibertyAttrValueSeq &mode_values = mode_attr->values();
     if (mode_values.size() == 2) {
-      LibertyAttrValue *value = mode_values[0];
+      const LibertyAttrValue *value = &mode_values[0];
       if (value->isString())
         timing_attrs.setModeName(value->stringValue());
       else
         warn(1248, mode_attr, "mode name is not a string.");
 
-      value = mode_values[1];
+      value = &mode_values[1];
       if (value->isString())
         timing_attrs.setModeValue(value->stringValue());
       else
@@ -3183,13 +3183,13 @@ LibertyReader::makeFloatTable(const LibertyComplexAttr *values_attr,
 {
   FloatTable table;
   table.reserve(rows);
-  for (const LibertyAttrValue *value : values_attr->values()) {
+  for (const LibertyAttrValue &value : values_attr->values()) {
     FloatSeq row;
     row.reserve(cols);
-    if (value->isString())
-      row = parseFloatList(value->stringValue(), scale, values_attr->line());
-    else if (value->isFloat()) {
-      auto [entry, valid] = value->floatValue();
+    if (value.isString())
+      row = parseFloatList(value.stringValue(), scale, values_attr->line());
+    else if (value.isFloat()) {
+      auto [entry, valid] = value.floatValue();
       row.push_back(entry * scale);
     }
     else
@@ -3254,12 +3254,12 @@ LibertyReader::getAttrFloat2(const LibertyComplexAttr *attr,
   exists = false;
   const LibertyAttrValueSeq &values = attr->values();
   if (values.size() == 2) {
-    LibertyAttrValue *value = values[0];
+    const LibertyAttrValue *value = &values[0];
     getAttrFloat(attr, value, value1, exists);
     if (!exists)
       warn(1272, attr, "{} is not a float.", attr->name());
 
-    value = values[1];
+    value = &values[1];
     getAttrFloat(attr, value, value2, exists);
     if (!exists)
       warn(1273, attr, "{} is not a float.", attr->name());
@@ -3321,23 +3321,23 @@ LibertyReader::readFloatSeq(const LibertyComplexAttr *attr,
   FloatSeq values;
   const LibertyAttrValueSeq &attr_values = attr->values();
   if (attr_values.size() == 1) {
-    LibertyAttrValue *value = attr_values[0];
-    if (value->isString())
-      values = parseFloatList(value->stringValue(), scale, attr->line());
+    const LibertyAttrValue &value = attr_values[0];
+    if (value.isString())
+      values = parseFloatList(value.stringValue(), scale, attr->line());
     else {
-      auto [entry, valid] = value->floatValue();
+      auto [entry, valid] = value.floatValue();
       if (valid)
         values.push_back(entry * scale);
     }
   }
   else if (attr_values.size() > 1) {
-    for (LibertyAttrValue *value : attr_values) {
-      if (value->isString()) {
-        FloatSeq parsed = parseFloatList(value->stringValue(), scale, attr->line());
+    for (const LibertyAttrValue &value : attr_values) {
+      if (value.isString()) {
+        FloatSeq parsed = parseFloatList(value.stringValue(), scale, attr->line());
         values.insert(values.end(), parsed.begin(), parsed.end());
       }
       else {
-        auto [entry, valid] = value->floatValue();
+        auto [entry, valid] = value.floatValue();
         if (valid)
           values.push_back(entry * scale);
       }

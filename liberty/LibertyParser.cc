@@ -79,22 +79,19 @@ LibertyParser::setFilename(std::string_view filename)
 }
 
 LibertyDefine *
-LibertyParser::makeDefine(const LibertyAttrValueSeq *values,
+LibertyParser::makeDefine(const LibertyAttrValueSeq &values,
                           int line)
 {
   LibertyDefine *define = nullptr;
-  if (values->size() == 3) {
-    std::string &define_name = (*values)[0]->stringValue();
-    const std::string &group_type_name = (*values)[1]->stringValue();
-    const std::string &value_type_name = (*values)[2]->stringValue();
+  if (values.size() == 3) {
+    std::string define_name = values[0].stringValue();
+    const std::string &group_type_name = values[1].stringValue();
+    const std::string &value_type_name = values[2].stringValue();
     LibertyAttrType value_type = attrValueType(value_type_name);
     LibertyGroupType group_type = groupType(group_type_name);
     define = new LibertyDefine(std::move(define_name), group_type, value_type, line);
     LibertyGroup *group = this->group();
     group->addDefine(define);
-    for (auto value : *values)
-      delete value;
-    delete values;
   }
   else
     report_->fileWarn(24, filename_, line,
@@ -137,15 +134,12 @@ LibertyParser::groupType(const std::string &group_type_name)
 
 void
 LibertyParser::groupBegin(std::string &&type,
-                          LibertyAttrValueSeq *params,
+                          LibertyAttrValueSeq params,
                           int line)
 {
   LibertyGroup *group = new LibertyGroup(std::move(type),
-                                         params
-                                         ? std::move(*params)
-                                         : LibertyAttrValueSeq(),
+                                         std::move(params),
                                          line);
-  delete params;
   LibertyGroup *parent_group = group_stack_.empty() ? nullptr : group_stack_.back();
   group_visitor_->begin(group, parent_group);
   group_stack_.push_back(group);
@@ -177,11 +171,11 @@ LibertyParser::deleteGroups()
 
 LibertySimpleAttr *
 LibertyParser::makeSimpleAttr(std::string &&name,
-                              const LibertyAttrValue *value,
+                              LibertyAttrValue value,
                               int line)
 {
-  LibertySimpleAttr *attr = new LibertySimpleAttr(std::move(name), *value, line);
-  delete value;
+  LibertySimpleAttr *attr = new LibertySimpleAttr(std::move(name),
+                                                  std::move(value), line);
   LibertyGroup *group = this->group();
   group->addAttr(attr);
   group_visitor_->visitAttr(attr);
@@ -190,7 +184,7 @@ LibertyParser::makeSimpleAttr(std::string &&name,
 
 LibertyComplexAttr *
 LibertyParser::makeComplexAttr(std::string &&name,
-                               const LibertyAttrValueSeq *values,
+                               LibertyAttrValueSeq values,
                                int line)
 {
   // Defines have the same syntax as complex attributes.
@@ -200,8 +194,8 @@ LibertyParser::makeComplexAttr(std::string &&name,
     return nullptr;  // Define is not a complex attr; already added to group
   }
   else {
-    LibertyComplexAttr *attr = new LibertyComplexAttr(std::move(name), *values, line);
-    delete values;
+    LibertyComplexAttr *attr = new LibertyComplexAttr(std::move(name),
+                                                      std::move(values), line);
     LibertyGroup *group = this->group();
     group->addAttr(attr);
     group_visitor_->visitAttr(attr);
@@ -221,16 +215,16 @@ LibertyParser::makeVariable(std::string &&var,
   return variable;
 }
 
-LibertyAttrValue *
+LibertyAttrValue
 LibertyParser::makeAttrValueString(std::string &&value)
 {
-  return new LibertyAttrValue(std::move(value));
+  return LibertyAttrValue(std::move(value));
 }
 
-LibertyAttrValue *
+LibertyAttrValue
 LibertyParser::makeAttrValueFloat(float value)
 {
-  return new LibertyAttrValue(value);
+  return LibertyAttrValue(value);
 }
 
 ////////////////////////////////////////////////////////////////
@@ -320,7 +314,7 @@ LibertyGroup::~LibertyGroup() { clear(); }
 void
 LibertyGroup::clear()
 {
-  deleteContents(params_);
+  params_.clear();
   deleteContents(simple_attr_map_);
   for (auto &attr : complex_attr_map_)
     deleteContents(attr.second);
@@ -407,8 +401,7 @@ LibertyGroup::hasFirstParam() const
 const std::string &
 LibertyGroup::firstParam() const
 {
-  LibertyAttrValue *value = params_[0];
-  return value->stringValue();
+  return params_[0].stringValue();
 }
 
 bool
@@ -420,8 +413,7 @@ LibertyGroup::hasSecondParam() const
 const std::string &
 LibertyGroup::secondParam() const
 {
-  LibertyAttrValue *value = params_[1];
-  return value->stringValue();
+  return params_[1].stringValue();
 }
 
 const LibertyGroupSeq &
@@ -548,13 +540,13 @@ LibertyComplexAttr::LibertyComplexAttr(std::string &&name,
 {
 }
 
-LibertyComplexAttr::~LibertyComplexAttr() { deleteContents(values_); }
+LibertyComplexAttr::~LibertyComplexAttr() = default;
 
 const LibertyAttrValue *
 LibertyComplexAttr::firstValue() const
 {
   if (!values_.empty())
-    return values_[0];
+    return &values_[0];
   else
     return nullptr;
 }

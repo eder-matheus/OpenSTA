@@ -51,7 +51,7 @@ using LibertySimpleAttrMap = std::map<std::string, LibertySimpleAttr*, std::less
 using LibertyComplexAttrSeq = std::vector<LibertyComplexAttr*>;
 using LibertyComplexAttrMap = std::map<std::string, LibertyComplexAttrSeq, std::less<>>;
 using LibertyDefineMap = std::map<std::string, LibertyDefine*, std::less<>>;
-using LibertyAttrValueSeq = std::vector<LibertyAttrValue*>;
+using LibertyAttrValueSeq = std::vector<LibertyAttrValue>;
 using LibertyVariableSeq = std::vector<LibertyVariable*>;
 using LibertyVariableMap = std::map<std::string, float, std::less<>>;
 using LibertyGroupVisitorMap = std::map<std::string, LibertyGroupVisitor*, std::less<>>;
@@ -70,24 +70,24 @@ public:
   const std::string &filename() const { return filename_; }
   void setFilename(std::string_view filename);
   Report *report() const { return report_; }
-  LibertyDefine *makeDefine(const LibertyAttrValueSeq *values,
-                           int line);
+  LibertyDefine *makeDefine(const LibertyAttrValueSeq &values,
+                            int line);
   LibertyAttrType attrValueType(const std::string &value_type_name);
   LibertyGroupType groupType(const std::string &group_type_name);
   void groupBegin(std::string &&type,
-                  LibertyAttrValueSeq *params,
+                  LibertyAttrValueSeq params,
                   int line);
   LibertyGroup *groupEnd();
   LibertyGroup *group();
   void deleteGroups();
   LibertySimpleAttr *makeSimpleAttr(std::string &&name,
-                                    const LibertyAttrValue *value,
+                                    LibertyAttrValue value,
                                     int line);
   LibertyComplexAttr *makeComplexAttr(std::string &&name,
-                                     const LibertyAttrValueSeq *values,
-                                     int line);
-  LibertyAttrValue *makeAttrValueString(std::string &&value);
-  LibertyAttrValue *makeAttrValueFloat(float value);
+                                      LibertyAttrValueSeq values,
+                                      int line);
+  LibertyAttrValue makeAttrValueString(std::string &&value);
+  LibertyAttrValue makeAttrValueFloat(float value);
   LibertyVariable *makeVariable(std::string &&var,
                                 float value,
                                 int line);
