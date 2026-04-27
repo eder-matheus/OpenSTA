@@ -47,10 +47,10 @@ static void expectStaLibertyCoreState(Sta *sta, LibertyLibrary *lib)
   EXPECT_NE(lib, nullptr);
 }
 
-static LibertyAttrValue *
+static LibertyAttrValue
 makeStringAttrValue(const char *value)
 {
-  return new LibertyAttrValue(std::string(value));
+  return LibertyAttrValue(std::string(value));
 }
 
 class LinearModelTest : public ::testing::Test {
@@ -1102,8 +1102,8 @@ TEST(R6_LibertySimpleAttrTest, FloatValueStorage) {
 
 TEST(R6_LibertyComplexAttrTest, Construction) {
   LibertyAttrValueSeq vals;
-  vals.push_back(new LibertyAttrValue(1.0f));
-  vals.push_back(new LibertyAttrValue(2.0f));
+  vals.push_back(LibertyAttrValue(1.0f));
+  vals.push_back(LibertyAttrValue(2.0f));
   LibertyComplexAttr attr("values", std::move(vals), 15);
   EXPECT_EQ(attr.name(), "values");
   EXPECT_EQ(attr.line(), 15);
@@ -1764,8 +1764,8 @@ TEST(LibertyParserTest, LibertyGroupConstruction) {
                                       LibertyAttrValue(3.0f),
                                       3));
   LibertyAttrValueSeq values;
-  values.push_back(new LibertyAttrValue(0.1f));
-  values.push_back(new LibertyAttrValue(0.2f));
+  values.push_back(LibertyAttrValue(0.1f));
+  values.push_back(LibertyAttrValue(0.2f));
   group.addAttr(new LibertyComplexAttr("index_1", std::move(values), 4));
   group.addDefine(new LibertyDefine("my_define",
                                     LibertyGroupType::cell,
@@ -1795,7 +1795,7 @@ TEST(LibertyParserTest, LibertyGroupConstruction) {
 TEST(LibertyParserTest, LibertyComplexAttr) {
   LibertyAttrValueSeq vals;
   vals.push_back(makeStringAttrValue("0.1"));
-  vals.push_back(new LibertyAttrValue(2.0f));
+  vals.push_back(LibertyAttrValue(2.0f));
   LibertyComplexAttr attr("complex_attr", std::move(vals), 5);
   EXPECT_EQ(attr.name(), "complex_attr");
   EXPECT_EQ(attr.line(), 5);

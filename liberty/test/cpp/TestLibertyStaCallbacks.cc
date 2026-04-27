@@ -150,10 +150,10 @@ static LibertyLibrary *writeAndReadLibReturn(Sta *sta, const char *content, cons
   return lib;
 }
 
-static LibertyAttrValue *
+static LibertyAttrValue
 makeStringAttrValue(const char *value)
 {
-  return new LibertyAttrValue(std::string(value));
+  return LibertyAttrValue(std::string(value));
 }
 
 class NoopLibertyVisitor : public LibertyGroupVisitor {
@@ -1541,7 +1541,7 @@ TEST_F(StaLibertyTest, LibertySimpleAttrIsComplex) {
 // R9_44: LibertyComplexAttr isSimple returns false
 TEST_F(StaLibertyTest, LibertyComplexAttrIsSimple) {
   LibertyAttrValueSeq values;
-  values.push_back(new LibertyAttrValue(1.0f));
+  values.push_back(LibertyAttrValue(1.0f));
   values.push_back(makeStringAttrValue("2.0"));
   LibertyComplexAttr attr("name", std::move(values), 1);
   ASSERT_NE(attr.firstValue(), nullptr);
@@ -3556,30 +3556,30 @@ TEST_F(StaLibertyTest, LibertyParserDirect) {
   RecordingLibertyVisitor visitor;
   LibertyParser parser("test_r11_parser.lib", &visitor, sta_->report());
 
-  auto *lib_params = new LibertyAttrValueSeq;
-  lib_params->push_back(parser.makeAttrValueString("test_r11_parser"));
-  parser.groupBegin("library", lib_params, 1);
+  LibertyAttrValueSeq lib_params;
+  lib_params.push_back(parser.makeAttrValueString("test_r11_parser"));
+  parser.groupBegin("library", std::move(lib_params), 1);
   parser.makeSimpleAttr("delay_model",
                         parser.makeAttrValueString("table_lookup"),
                         2);
   parser.makeSimpleAttr("time_unit",
                         parser.makeAttrValueString("1ns"),
                         3);
-  auto *define_values = new LibertyAttrValueSeq;
-  define_values->push_back(parser.makeAttrValueString("my_attr"));
-  define_values->push_back(parser.makeAttrValueString("cell"));
-  define_values->push_back(parser.makeAttrValueString("string"));
-  parser.makeComplexAttr("define", define_values, 4);
+  LibertyAttrValueSeq define_values;
+  define_values.push_back(parser.makeAttrValueString("my_attr"));
+  define_values.push_back(parser.makeAttrValueString("cell"));
+  define_values.push_back(parser.makeAttrValueString("string"));
+  parser.makeComplexAttr("define", std::move(define_values), 4);
   parser.makeVariable("my_var", 3.14f, 5);
 
-  auto *cell_params = new LibertyAttrValueSeq;
-  cell_params->push_back(parser.makeAttrValueString("P1"));
-  parser.groupBegin("cell", cell_params, 6);
+  LibertyAttrValueSeq cell_params;
+  cell_params.push_back(parser.makeAttrValueString("P1"));
+  parser.groupBegin("cell", std::move(cell_params), 6);
   parser.makeSimpleAttr("area", parser.makeAttrValueFloat(1.0f), 7);
-  auto *complex_values = new LibertyAttrValueSeq;
-  complex_values->push_back(parser.makeAttrValueFloat(0.01f));
-  complex_values->push_back(parser.makeAttrValueFloat(0.02f));
-  parser.makeComplexAttr("values", complex_values, 8);
+  LibertyAttrValueSeq complex_values;
+  complex_values.push_back(parser.makeAttrValueFloat(0.01f));
+  complex_values.push_back(parser.makeAttrValueFloat(0.02f));
+  parser.makeComplexAttr("values", std::move(complex_values), 8);
   LibertyGroup *cell = parser.groupEnd();
   LibertyGroup *library = parser.groupEnd();
 
@@ -3607,10 +3607,10 @@ TEST_F(StaLibertyTest, LibertyParserDirect) {
 
   NoopLibertyVisitor cleanup_visitor;
   LibertyParser cleanup_parser("cleanup.lib", &cleanup_visitor, sta_->report());
-  auto *cleanup_params = new LibertyAttrValueSeq;
-  cleanup_params->push_back(cleanup_parser.makeAttrValueString("cleanup"));
-  cleanup_parser.groupBegin("library", cleanup_params, 1);
-  cleanup_parser.groupBegin("cell", new LibertyAttrValueSeq, 2);
+  LibertyAttrValueSeq cleanup_params;
+  cleanup_params.push_back(cleanup_parser.makeAttrValueString("cleanup"));
+  cleanup_parser.groupBegin("library", std::move(cleanup_params), 1);
+  cleanup_parser.groupBegin("cell", LibertyAttrValueSeq{}, 2);
   cleanup_parser.deleteGroups();
 }
 

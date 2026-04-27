@@ -104,6 +104,9 @@ private:
 class LibertyAttrValue
 {
 public:
+  // Bison's variant API requires default-constructibility for slots
+  // declared with %type <T>; the default value is float 0.
+  LibertyAttrValue() = default;
   LibertyAttrValue(float value);
   LibertyAttrValue(std::string &&value);
   bool isString() const { return std::holds_alternative<std::string>(value_); }
