@@ -26,6 +26,7 @@
 
 #include <functional>
 #include <string_view>
+#include <variant>
 #include <vector>
 #include <map>
 #include <utility>
@@ -105,15 +106,13 @@ class LibertyAttrValue
 public:
   LibertyAttrValue(float value);
   LibertyAttrValue(std::string &&value);
-  bool isString() const;
-  bool isFloat() const;
+  bool isString() const { return std::holds_alternative<std::string>(value_); }
+  bool isFloat()  const { return std::holds_alternative<float>(value_); }
   std::pair<float, bool> floatValue() const;
-  const std::string &stringValue() const { return string_value_; }
-  std::string &stringValue() { return string_value_; }
+  const std::string &stringValue() const { return std::get<std::string>(value_); }
 
 private:
-  float float_value_;
-  std::string string_value_;
+  std::variant<float, std::string> value_;
 };
 
 // Groups are a type keyword with a set of parameters and statements
