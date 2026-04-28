@@ -32,6 +32,7 @@
 #include <gtest/gtest.h>
 
 #include "Liberty.hh"
+#include "TableModel.hh"
 #include "Transition.hh"
 
 namespace sta {
@@ -154,6 +155,140 @@ expectScalarsRoundTripped(LibertyLibrary *lib)
 #undef EXPECT_RFV_EQ
 #undef EXPECT_PAIR_EQ
 
+// Populate the library-level shared resources serialized in commit 2.
+// Each user-created entry pairs with an explicit assertion in
+// expectSharedResourcesRoundTripped below.
+static void
+populateSharedResources(LibertyLibrary *lib)
+{
+  // Bus declarations.
+  lib->makeBusDcl("BUS8", 7, 0);
+  lib->makeBusDcl("BUS16", 0, 15);
+
+  // Operating conditions.
+  OperatingConditions *slow = lib->makeOperatingConditions("slow");
+  slow->setProcess(1.2F);
+  slow->setVoltage(0.95F);
+  slow->setTemperature(125.0F);
+  slow->setWireloadTree(WireloadTree::worst_case);
+
+  OperatingConditions *fast = lib->makeOperatingConditions("fast");
+  fast->setProcess(0.8F);
+  fast->setVoltage(1.10F);
+  fast->setTemperature(-40.0F);
+  fast->setWireloadTree(WireloadTree::best_case);
+  lib->setDefaultOperatingConditions(slow);
+
+  // Scale factors. Set a couple of distinguishable scale slots so the
+  // round-trip is checked at a representative pair of indices, not
+  // just at the all-zeros default.
+  ScaleFactors *sf = lib->makeScaleFactors("typical_scales");
+  sf->setScale(ScaleFactorType::cell,
+               ScaleFactorPvt::process,
+               RiseFall::rise(), 1.10F);
+  sf->setScale(ScaleFactorType::cell,
+               ScaleFactorPvt::volt,
+               RiseFall::fall(), 0.95F);
+  lib->setScaleFactors(sf);
+
+  // Supply voltages.
+  lib->addSupplyVoltage("VDD", 0.9F);
+  lib->addSupplyVoltage("VDDH", 1.8F);
+
+  // Table templates with axes. Constructing axes with explicit values
+  // also exercises writeFloatArray / readFloatArray.
+  TableTemplate *delay_tt = lib->makeTableTemplate("delay_2x3",
+                                                   TableTemplateType::delay);
+  FloatSeq slew_pts{ 0.01F, 0.05F, 0.20F };
+  FloatSeq cap_pts { 0.005F, 0.050F };
+  delay_tt->setAxis1(std::make_shared<TableAxis>(
+      TableAxisVariable::input_net_transition, std::move(slew_pts)));
+  delay_tt->setAxis2(std::make_shared<TableAxis>(
+      TableAxisVariable::total_output_net_capacitance, std::move(cap_pts)));
+
+  TableTemplate *power_tt = lib->makeTableTemplate("power_1d",
+                                                   TableTemplateType::power);
+  FloatSeq pwr_pts{ 0.0F, 0.5F, 1.0F, 1.5F };
+  power_tt->setAxis1(std::make_shared<TableAxis>(
+      TableAxisVariable::input_transition_time, std::move(pwr_pts)));
+}
+
+static void
+expectSharedResourcesRoundTripped(LibertyLibrary *lib)
+{
+  // Bus declarations: confirmed via findBusDcl by name.
+  ASSERT_NE(lib->findBusDcl("BUS8"), nullptr);
+  EXPECT_EQ(lib->findBusDcl("BUS8")->from(), 7);
+  EXPECT_EQ(lib->findBusDcl("BUS8")->to(),   0);
+  ASSERT_NE(lib->findBusDcl("BUS16"), nullptr);
+  EXPECT_EQ(lib->findBusDcl("BUS16")->from(), 0);
+  EXPECT_EQ(lib->findBusDcl("BUS16")->to(),   15);
+
+  // Operating conditions.
+  OperatingConditions *slow = lib->findOperatingConditions("slow");
+  ASSERT_NE(slow, nullptr);
+  EXPECT_FLOAT_EQ(slow->process(),     1.2F);
+  EXPECT_FLOAT_EQ(slow->voltage(),     0.95F);
+  EXPECT_FLOAT_EQ(slow->temperature(), 125.0F);
+  EXPECT_EQ(slow->wireloadTree(), WireloadTree::worst_case);
+
+  OperatingConditions *fast = lib->findOperatingConditions("fast");
+  ASSERT_NE(fast, nullptr);
+  EXPECT_FLOAT_EQ(fast->voltage(), 1.10F);
+  EXPECT_EQ(fast->wireloadTree(), WireloadTree::best_case);
+
+  EXPECT_EQ(lib->defaultOperatingConditions(), slow);
+
+  // Scale factors.
+  ASSERT_NE(lib->scaleFactors(), nullptr);
+  EXPECT_EQ(lib->scaleFactors()->name(), "typical_scales");
+  EXPECT_FLOAT_EQ(lib->scaleFactors()->scale(ScaleFactorType::cell,
+                                             ScaleFactorPvt::process,
+                                             RiseFall::rise()),
+                  1.10F);
+  EXPECT_FLOAT_EQ(lib->scaleFactors()->scale(ScaleFactorType::cell,
+                                             ScaleFactorPvt::volt,
+                                             RiseFall::fall()),
+                  0.95F);
+
+  // Supply voltages.
+  EXPECT_TRUE(lib->supplyExists("VDD"));
+  EXPECT_TRUE(lib->supplyExists("VDDH"));
+  float volt = 0;
+  bool exists = false;
+  lib->supplyVoltage("VDD", volt, exists);
+  EXPECT_TRUE(exists);
+  EXPECT_FLOAT_EQ(volt, 0.9F);
+  lib->supplyVoltage("VDDH", volt, exists);
+  EXPECT_TRUE(exists);
+  EXPECT_FLOAT_EQ(volt, 1.8F);
+
+  // Table templates: axes (variable + values) are the only field that
+  // requires write/read float arrays, so this also validates that path.
+  TableTemplate *delay_tt = lib->findTableTemplate("delay_2x3",
+                                                   TableTemplateType::delay);
+  ASSERT_NE(delay_tt, nullptr);
+  ASSERT_NE(delay_tt->axis1(), nullptr);
+  EXPECT_EQ(delay_tt->axis1()->variable(),
+            TableAxisVariable::input_net_transition);
+  ASSERT_EQ(delay_tt->axis1()->values().size(), 3u);
+  EXPECT_FLOAT_EQ(delay_tt->axis1()->values()[2], 0.20F);
+  ASSERT_NE(delay_tt->axis2(), nullptr);
+  EXPECT_EQ(delay_tt->axis2()->variable(),
+            TableAxisVariable::total_output_net_capacitance);
+  ASSERT_EQ(delay_tt->axis2()->values().size(), 2u);
+  EXPECT_FLOAT_EQ(delay_tt->axis2()->values()[1], 0.050F);
+  EXPECT_EQ(delay_tt->axis3(), nullptr);
+
+  TableTemplate *power_tt = lib->findTableTemplate("power_1d",
+                                                   TableTemplateType::power);
+  ASSERT_NE(power_tt, nullptr);
+  ASSERT_NE(power_tt->axis1(), nullptr);
+  ASSERT_EQ(power_tt->axis1()->values().size(), 4u);
+  EXPECT_FLOAT_EQ(power_tt->axis1()->values()[3], 1.5F);
+  EXPECT_EQ(power_tt->axis2(), nullptr);
+}
+
 TEST(LibertyCache, ScalarsRoundTrip)
 {
   // Empty filename keeps the writer from stamping a real source path,
@@ -174,6 +309,23 @@ TEST(LibertyCache, ScalarsRoundTrip)
 
   EXPECT_EQ(dst->name(), "test_lib");
   expectScalarsRoundTripped(dst.get());
+}
+
+TEST(LibertyCache, SharedResourcesRoundTrip)
+{
+  std::unique_ptr<LibertyLibrary> src(new LibertyLibrary("shared_lib", ""));
+  populateLibraryScalars(src.get());
+  populateSharedResources(src.get());
+
+  TempCachePath cache_path("/tmp/sta_libcache_shared.cache");
+  writeLibertyCache(src.get(), cache_path.c_str(), nullptr);
+
+  std::unique_ptr<LibertyLibrary> dst(
+      readLibertyCache(cache_path.c_str(), true, nullptr));
+  ASSERT_NE(dst.get(), nullptr);
+
+  expectScalarsRoundTripped(dst.get());
+  expectSharedResourcesRoundTripped(dst.get());
 }
 
 TEST(LibertyCache, RejectsBadMagic)

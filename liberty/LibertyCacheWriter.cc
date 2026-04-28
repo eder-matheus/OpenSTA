@@ -33,6 +33,7 @@
 #include "Liberty.hh"
 #include "LibertyCacheFormat.hh"
 #include "StaConfig.hh"
+#include "TableModel.hh"
 #include "Transition.hh"
 
 namespace sta {
@@ -163,6 +164,100 @@ writeLibraryScalars(FILE *f, const LibertyLibrary *lib)
   cache::writeBool(f, exists);
 }
 
+void
+writeBusDcls(FILE *f, const LibertyLibrary *lib)
+{
+  cache::writeSectionId(f, SectionId::BusDcls);
+  const BusDclSeq dcls = lib->busDcls();
+  cache::writeU32(f, static_cast<uint32_t>(dcls.size()));
+  for (const BusDcl *bd : dcls) {
+    cache::writeString(f, bd->name());
+    cache::writeI64(f, bd->from());
+    cache::writeI64(f, bd->to());
+  }
+}
+
+void
+writeOperatingConditions(FILE *f, const LibertyLibrary *lib)
+{
+  cache::writeSectionId(f, SectionId::OperatingConditions);
+  const OperatingConditionsMap &op_map = lib->operatingConditionsMap();
+  cache::writeU32(f, static_cast<uint32_t>(op_map.size()));
+  for (const auto &[name, op] : op_map) {
+    cache::writeString(f, name);
+    cache::writeFloat(f, op.process());
+    cache::writeFloat(f, op.voltage());
+    cache::writeFloat(f, op.temperature());
+    cache::writeU32(f, static_cast<uint32_t>(op.wireloadTree()));
+  }
+  // Default by name (empty if none).
+  const OperatingConditions *def = lib->defaultOperatingConditions();
+  cache::writeString(f, def ? def->name() : std::string{});
+}
+
+void
+writeScaleFactors(FILE *f, const LibertyLibrary *lib)
+{
+  cache::writeSectionId(f, SectionId::ScaleFactors);
+  const ScaleFactorsMap &sf_map = lib->scaleFactorsMap();
+  cache::writeU32(f, static_cast<uint32_t>(sf_map.size()));
+  for (const auto &[name, sf] : sf_map) {
+    cache::writeString(f, name);
+    // The 3D scales array is dense; writers cast away const because
+    // the existing scale() accessor isn't const. We only read.
+    auto &sf_mut = const_cast<ScaleFactors&>(sf);
+    for (int t = 0; t < scale_factor_type_count; ++t) {
+      for (int p = 0; p < scale_factor_pvt_count; ++p) {
+        for (auto rf : RiseFall::range())
+          cache::writeFloat(f, sf_mut.scale(static_cast<ScaleFactorType>(t),
+                                            static_cast<ScaleFactorPvt>(p), rf));
+      }
+    }
+  }
+  const ScaleFactors *def = lib->scaleFactors();
+  cache::writeString(f, def ? def->name() : std::string{});
+}
+
+void
+writeSupplyVoltages(FILE *f, const LibertyLibrary *lib)
+{
+  cache::writeSectionId(f, SectionId::SupplyVoltages);
+  const SupplyVoltageMap &sv_map = lib->supplyVoltageMap();
+  cache::writeU32(f, static_cast<uint32_t>(sv_map.size()));
+  for (const auto &[name, voltage] : sv_map) {
+    cache::writeString(f, name);
+    cache::writeFloat(f, voltage);
+  }
+}
+
+// Serialize a TableAxis as (variable, values[]). The shared_ptr wrapper
+// is irrelevant on disk — every cache-loaded axis is freshly allocated.
+void
+writeTableAxis(FILE *f, const TableAxis *axis)
+{
+  cache::writeBool(f, axis != nullptr);
+  if (axis == nullptr)
+    return;
+  cache::writeU32(f, static_cast<uint32_t>(axis->variable()));
+  const FloatSeq &values = axis->values();
+  cache::writeFloatArray(f, values.data(), values.size());
+}
+
+void
+writeTableTemplates(FILE *f, const LibertyLibrary *lib)
+{
+  cache::writeSectionId(f, SectionId::TableTemplates);
+  TableTemplateSeq templates = lib->tableTemplates();
+  cache::writeU32(f, static_cast<uint32_t>(templates.size()));
+  for (const TableTemplate *tt : templates) {
+    cache::writeU32(f, static_cast<uint32_t>(tt->type()));
+    cache::writeString(f, tt->name());
+    writeTableAxis(f, tt->axis1());
+    writeTableAxis(f, tt->axis2());
+    writeTableAxis(f, tt->axis3());
+  }
+}
+
 } // namespace
 
 void
@@ -178,6 +273,11 @@ writeLibertyCache(LibertyLibrary *lib,
   writeHeader(f, lib);
   writeLibraryHeader(f, lib);
   writeLibraryScalars(f, lib);
+  writeBusDcls(f, lib);
+  writeOperatingConditions(f, lib);
+  writeScaleFactors(f, lib);
+  writeSupplyVoltages(f, lib);
+  writeTableTemplates(f, lib);
   cache::writeSectionId(f, SectionId::EndMarker);
 }
 

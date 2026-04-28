@@ -36,6 +36,7 @@
 #include "LibertyCacheFormat.hh"
 #include "Network.hh"
 #include "StaConfig.hh"
+#include "TableModel.hh"
 #include "StaState.hh"
 #include "Transition.hh"
 
@@ -188,6 +189,106 @@ readLibraryScalars(FILE *f, LibertyLibrary *lib)
   }
 }
 
+void
+readBusDcls(FILE *f, LibertyLibrary *lib)
+{
+  cache::expectSectionId(f, SectionId::BusDcls);
+  uint32_t n = cache::readU32(f);
+  for (uint32_t i = 0; i < n; ++i) {
+    std::string name = cache::readString(f);
+    int from = static_cast<int>(cache::readI64(f));
+    int to   = static_cast<int>(cache::readI64(f));
+    lib->makeBusDcl(name, from, to);
+  }
+}
+
+void
+readOperatingConditions(FILE *f, LibertyLibrary *lib)
+{
+  cache::expectSectionId(f, SectionId::OperatingConditions);
+  uint32_t n = cache::readU32(f);
+  for (uint32_t i = 0; i < n; ++i) {
+    std::string name = cache::readString(f);
+    OperatingConditions *op = lib->makeOperatingConditions(name);
+    op->setProcess(cache::readFloat(f));
+    op->setVoltage(cache::readFloat(f));
+    op->setTemperature(cache::readFloat(f));
+    op->setWireloadTree(static_cast<WireloadTree>(cache::readU32(f)));
+  }
+  std::string default_name = cache::readString(f);
+  if (!default_name.empty())
+    lib->setDefaultOperatingConditions(lib->findOperatingConditions(default_name));
+}
+
+void
+readScaleFactors(FILE *f, LibertyLibrary *lib)
+{
+  cache::expectSectionId(f, SectionId::ScaleFactors);
+  uint32_t n = cache::readU32(f);
+  for (uint32_t i = 0; i < n; ++i) {
+    std::string name = cache::readString(f);
+    ScaleFactors *sf = lib->makeScaleFactors(name);
+    for (int t = 0; t < scale_factor_type_count; ++t) {
+      for (int p = 0; p < scale_factor_pvt_count; ++p) {
+        for (auto rf : RiseFall::range())
+          sf->setScale(static_cast<ScaleFactorType>(t),
+                       static_cast<ScaleFactorPvt>(p), rf,
+                       cache::readFloat(f));
+      }
+    }
+  }
+  std::string default_name = cache::readString(f);
+  if (!default_name.empty())
+    lib->setScaleFactors(lib->findScaleFactors(default_name));
+}
+
+void
+readSupplyVoltages(FILE *f, LibertyLibrary *lib)
+{
+  cache::expectSectionId(f, SectionId::SupplyVoltages);
+  uint32_t n = cache::readU32(f);
+  for (uint32_t i = 0; i < n; ++i) {
+    std::string name = cache::readString(f);
+    float voltage = cache::readFloat(f);
+    lib->addSupplyVoltage(name, voltage);
+  }
+}
+
+// Returns the deserialized TableAxis, or nullptr if the on-disk
+// "present" flag was false.
+TableAxisPtr
+readTableAxis(FILE *f)
+{
+  bool present = cache::readBool(f);
+  if (!present)
+    return nullptr;
+  TableAxisVariable variable = static_cast<TableAxisVariable>(cache::readU32(f));
+  std::vector<float> values = cache::readFloatArray(f);
+  FloatSeq fs(values.begin(), values.end());
+  return std::make_shared<TableAxis>(variable, std::move(fs));
+}
+
+void
+readTableTemplates(FILE *f, LibertyLibrary *lib)
+{
+  cache::expectSectionId(f, SectionId::TableTemplates);
+  uint32_t n = cache::readU32(f);
+  for (uint32_t i = 0; i < n; ++i) {
+    TableTemplateType type = static_cast<TableTemplateType>(cache::readU32(f));
+    std::string name = cache::readString(f);
+    TableAxisPtr axis1 = readTableAxis(f);
+    TableAxisPtr axis2 = readTableAxis(f);
+    TableAxisPtr axis3 = readTableAxis(f);
+    // The library owns all template instances. makeTableTemplate
+    // inserts a default-constructed template under (name, type) and
+    // returns a pointer that we then fill in.
+    TableTemplate *tt = lib->makeTableTemplate(name, type);
+    tt->setAxis1(axis1);
+    tt->setAxis2(axis2);
+    tt->setAxis3(axis3);
+  }
+}
+
 } // namespace
 
 LibertyLibrary *
@@ -208,13 +309,18 @@ readLibertyCache(const char *filename,
   DelayModelType delay_model;
   readLibraryHeader(f, name, lib_filename, delay_model);
 
-  Network *network = sta->networkReader();
+  Network *network = sta ? sta->networkReader() : nullptr;
   LibertyLibrary *lib = network
       ? network->makeLibertyLibrary(name, lib_filename)
       : new LibertyLibrary(name, lib_filename);
   lib->setDelayModelType(delay_model);
 
   readLibraryScalars(f, lib);
+  readBusDcls(f, lib);
+  readOperatingConditions(f, lib);
+  readScaleFactors(f, lib);
+  readSupplyVoltages(f, lib);
+  readTableTemplates(f, lib);
 
   cache::expectSectionId(f, SectionId::EndMarker);
   return lib;

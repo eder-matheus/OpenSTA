@@ -351,6 +351,10 @@ public:
   OperatingConditions *findOperatingConditions(std::string_view name);
   OperatingConditions *defaultOperatingConditions() const;
   void setDefaultOperatingConditions(OperatingConditions *op_cond);
+  const OperatingConditionsMap &operatingConditionsMap() const
+  { return operating_conditions_; }
+  const ScaleFactorsMap &scaleFactorsMap() const { return scale_factors_map_; }
+  const SupplyVoltageMap &supplyVoltageMap() const { return supply_voltage_map_; }
 
   // AOCV
   // Zero means the ocv depth is not specified.

@@ -126,6 +126,24 @@ readString(FILE *f)
 }
 
 void
+writeFloatArray(FILE *f, const float *data, size_t n)
+{
+  writeU32(f, static_cast<uint32_t>(n));
+  if (n > 0)
+    writeRaw(f, data, n * sizeof(float));
+}
+
+std::vector<float>
+readFloatArray(FILE *f)
+{
+  uint32_t n = readU32(f);
+  std::vector<float> out(n);
+  if (n > 0)
+    readRaw(f, out.data(), n * sizeof(float));
+  return out;
+}
+
+void
 writeSectionId(FILE *f, SectionId id)
 {
   writeU32(f, static_cast<uint32_t>(id));

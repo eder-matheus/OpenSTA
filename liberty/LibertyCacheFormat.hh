@@ -28,6 +28,7 @@
 #include <cstdio>
 #include <string>
 #include <string_view>
+#include <vector>
 
 #include "LibertyCache.hh"  // for LibertyCacheFormatError
 
@@ -54,9 +55,14 @@ inline constexpr uint32_t kEndianSentinel = 0x12345678;
 // sections. Today, every reader expects every writer-emitted section
 // in order.
 enum class SectionId : uint32_t {
-  LibraryHeader  = 0x01,
-  LibraryScalars = 0x02,
-  EndMarker      = 0xFF,
+  LibraryHeader      = 0x01,
+  LibraryScalars     = 0x02,
+  BusDcls            = 0x10,
+  OperatingConditions = 0x11,
+  ScaleFactors       = 0x12,
+  SupplyVoltages     = 0x13,
+  TableTemplates     = 0x14,
+  EndMarker          = 0xFF,
 };
 
 // Header flags. Reserved for future use (e.g., "compressed body",
@@ -90,6 +96,11 @@ bool readBool(FILE *f);
 
 void writeString(FILE *f, std::string_view s);
 std::string readString(FILE *f);
+
+// Length-prefixed float array. The raw bytes are streamed as a single
+// fwrite/fread for cache-friendly throughput on large tables.
+void writeFloatArray(FILE *f, const float *data, size_t n);
+std::vector<float> readFloatArray(FILE *f);
 
 // Section helpers: read/verify or write the section ID at the head
 // of a section. Throw LibertyCacheFormatError on mismatch.
