@@ -274,6 +274,51 @@ readTableAxis(FILE *f)
   return std::make_shared<TableAxis>(variable, std::move(fs));
 }
 
+// === Table read (commit 4a) =========================================
+//
+// Mirror of writeTable in LibertyCacheWriter.cc; see the comment block
+// there for the on-disk shape.
+
+TablePtr
+readTablePtr(FILE *f)
+{
+  bool present = cache::readBool(f);
+  if (!present)
+    return nullptr;
+  uint32_t order = cache::readU32(f);
+  switch (order) {
+  case 0: {
+    float v = cache::readFloat(f);
+    return std::make_shared<Table>(v);
+  }
+  case 1: {
+    TableAxisPtr axis1 = readTableAxis(f);
+    auto raw = cache::readFloatArray(f);
+    FloatSeq fs(raw.begin(), raw.end());
+    return std::make_shared<Table>(std::move(fs), axis1);
+  }
+  case 2:
+  case 3: {
+    TableAxisPtr axis1 = readTableAxis(f);
+    TableAxisPtr axis2 = readTableAxis(f);
+    TableAxisPtr axis3 = (order == 3) ? readTableAxis(f) : nullptr;
+    uint32_t row_count = cache::readU32(f);
+    FloatTable rows;
+    rows.reserve(row_count);
+    for (uint32_t r = 0; r < row_count; ++r) {
+      auto raw = cache::readFloatArray(f);
+      rows.emplace_back(raw.begin(), raw.end());
+    }
+    if (order == 2)
+      return std::make_shared<Table>(std::move(rows), axis1, axis2);
+    return std::make_shared<Table>(std::move(rows), axis1, axis2, axis3);
+  }
+  default:
+    cache::error(sta::format("liberty cache: unsupported table order {}", order));
+  }
+  return nullptr;
+}
+
 void
 readTableTemplates(FILE *f, LibertyLibrary *lib)
 {
@@ -456,6 +501,42 @@ readCellPortDetails(FILE *f, const std::vector<LibertyPort*> &ports)
 }
 
 void
+readOcvDerates(FILE *f, LibertyLibrary *lib)
+{
+  cache::expectSectionId(f, SectionId::OcvDerates);
+  uint32_t n = cache::readU32(f);
+  for (uint32_t i = 0; i < n; ++i) {
+    std::string name = cache::readString(f);
+    OcvDerate *derate = lib->makeOcvDerate(name);
+    for (auto rf : RiseFall::range()) {
+      for (auto el : EarlyLate::range()) {
+        for (size_t pt = 0; pt < path_type_count; ++pt) {
+          TablePtr table = readTablePtr(f);
+          if (table)
+            derate->setDerateTable(rf, el, static_cast<PathType>(pt),
+                                   std::move(table));
+        }
+      }
+    }
+  }
+  std::string default_name = cache::readString(f);
+  if (!default_name.empty())
+    lib->setDefaultOcvDerate(lib->findOcvDerate(default_name));
+}
+
+void
+readDriverWaveforms(FILE *f, LibertyLibrary *lib)
+{
+  cache::expectSectionId(f, SectionId::DriverWaveforms);
+  uint32_t n = cache::readU32(f);
+  for (uint32_t i = 0; i < n; ++i) {
+    std::string name = cache::readString(f);
+    TablePtr waveforms = readTablePtr(f);
+    lib->makeDriverWaveform(name, waveforms);
+  }
+}
+
+void
 readCells(FILE *f, LibertyLibrary *lib)
 {
   cache::expectSectionId(f, SectionId::Cells);
@@ -627,6 +708,8 @@ readLibertyCache(const char *filename,
   readScaleFactors(f, lib);
   readSupplyVoltages(f, lib);
   readTableTemplates(f, lib);
+  readOcvDerates(f, lib);
+  readDriverWaveforms(f, lib);
   readCells(f, lib);
 
   cache::expectSectionId(f, SectionId::EndMarker);

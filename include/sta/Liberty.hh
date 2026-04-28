@@ -397,6 +397,9 @@ public:
   DriverWaveform *driverWaveformDefault() { return findDriverWaveform(""); }
   DriverWaveform *makeDriverWaveform(std::string_view name,
                                      const TablePtr &waveforms);
+  const OcvDerateMap &ocvDerateMap() const { return ocv_derate_map_; }
+  const DriverWaveformMap &driverWaveformMap() const
+  { return driver_waveform_map_; }
 
 protected:
   float degradeWireSlew(const TableModel *model,

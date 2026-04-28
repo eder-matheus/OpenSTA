@@ -615,6 +615,127 @@ expectSequentialCellRoundTripped(LibertyLibrary *lib)
   EXPECT_EQ(s.outputInv(), nullptr);
 }
 
+// Helper: build a small 1D Table (size N) for tests.
+static TablePtr
+make1DTable(TableAxisVariable var, std::vector<float> axis_pts,
+            std::vector<float> values)
+{
+  FloatSeq axis_fs(axis_pts.begin(), axis_pts.end());
+  TableAxisPtr axis = std::make_shared<TableAxis>(var, std::move(axis_fs));
+  FloatSeq vals(values.begin(), values.end());
+  return std::make_shared<Table>(std::move(vals), axis);
+}
+
+// Helper: build a 2D Table.
+static TablePtr
+make2DTable(TableAxisVariable var1, std::vector<float> axis1_pts,
+            TableAxisVariable var2, std::vector<float> axis2_pts,
+            std::vector<std::vector<float>> values)
+{
+  FloatSeq a1(axis1_pts.begin(), axis1_pts.end());
+  FloatSeq a2(axis2_pts.begin(), axis2_pts.end());
+  TableAxisPtr axis1 = std::make_shared<TableAxis>(var1, std::move(a1));
+  TableAxisPtr axis2 = std::make_shared<TableAxis>(var2, std::move(a2));
+  FloatTable t;
+  t.reserve(values.size());
+  for (auto &row : values)
+    t.emplace_back(row.begin(), row.end());
+  return std::make_shared<Table>(std::move(t), axis1, axis2);
+}
+
+static void
+populateOcvAndDriverWaveforms(LibertyLibrary *lib)
+{
+  // OcvDerate "early_drv": one 1D table (rise/early/clk) + one 2D
+  // table (fall/late/data). All other slots remain null.
+  OcvDerate *derate = lib->makeOcvDerate("early_drv");
+  derate->setDerateTable(RiseFall::rise(), EarlyLate::early(), PathType::clk,
+                         make1DTable(TableAxisVariable::input_net_transition,
+                                     {0.01F, 0.05F, 0.20F},
+                                     {0.95F, 1.00F, 1.05F}));
+  derate->setDerateTable(RiseFall::fall(), EarlyLate::late(), PathType::data,
+                         make2DTable(TableAxisVariable::input_net_transition,
+                                     {0.01F, 0.05F},
+                                     TableAxisVariable::total_output_net_capacitance,
+                                     {0.005F, 0.050F, 0.500F},
+                                     {{1.10F, 1.05F, 1.00F},
+                                      {1.20F, 1.10F, 1.05F}}));
+  lib->setDefaultOcvDerate(derate);
+
+  // DriverWaveform: a 2D table (slew × time → voltage).
+  TablePtr wf = make2DTable(TableAxisVariable::input_net_transition,
+                            {0.01F, 0.05F},
+                            TableAxisVariable::time,
+                            {0.0F, 0.5F, 1.0F},
+                            {{0.0F, 0.5F, 0.9F},
+                             {0.0F, 0.4F, 0.8F}});
+  lib->makeDriverWaveform("rising_wave", wf);
+}
+
+static void
+expectOcvAndDriverWaveformsRoundTripped(LibertyLibrary *lib)
+{
+  // OCV derate.
+  OcvDerate *derate = lib->findOcvDerate("early_drv");
+  ASSERT_NE(derate, nullptr);
+  EXPECT_EQ(lib->defaultOcvDerate(), derate);
+
+  // Rise/early/clk: 1D, 3 entries.
+  const Table *t1 = derate->derateTable(RiseFall::rise(), EarlyLate::early(),
+                                        PathType::clk);
+  ASSERT_NE(t1, nullptr);
+  EXPECT_EQ(t1->order(), 1);
+  ASSERT_NE(t1->axis1(), nullptr);
+  ASSERT_EQ(t1->axis1()->values().size(), 3u);
+  EXPECT_FLOAT_EQ(t1->axis1()->values()[2], 0.20F);
+  EXPECT_FLOAT_EQ(t1->value(static_cast<size_t>(0)), 0.95F);
+  EXPECT_FLOAT_EQ(t1->value(static_cast<size_t>(2)), 1.05F);
+
+  // Fall/late/data: 2D, 2 rows × 3 cols.
+  const Table *t2 = derate->derateTable(RiseFall::fall(), EarlyLate::late(),
+                                        PathType::data);
+  ASSERT_NE(t2, nullptr);
+  EXPECT_EQ(t2->order(), 2);
+  ASSERT_NE(t2->axis1(), nullptr);
+  ASSERT_NE(t2->axis2(), nullptr);
+  EXPECT_EQ(t2->axis1()->values().size(), 2u);
+  EXPECT_EQ(t2->axis2()->values().size(), 3u);
+  EXPECT_FLOAT_EQ(t2->value(0, 0), 1.10F);
+  EXPECT_FLOAT_EQ(t2->value(1, 2), 1.05F);
+
+  // Other slots are null.
+  EXPECT_EQ(derate->derateTable(RiseFall::rise(), EarlyLate::late(),
+                                PathType::clk),
+            nullptr);
+
+  // DriverWaveform.
+  DriverWaveform *wf = lib->findDriverWaveform("rising_wave");
+  ASSERT_NE(wf, nullptr);
+  const Table *wf_table = wf->waveformsTable();
+  ASSERT_NE(wf_table, nullptr);
+  EXPECT_EQ(wf_table->order(), 2);
+  EXPECT_EQ(wf_table->axis1()->values().size(), 2u);
+  EXPECT_EQ(wf_table->axis2()->values().size(), 3u);
+  EXPECT_FLOAT_EQ(wf_table->value(0, 2), 0.9F);
+  EXPECT_FLOAT_EQ(wf_table->value(1, 1), 0.4F);
+}
+
+TEST(LibertyCache, OcvAndDriverWaveformsRoundTrip)
+{
+  std::unique_ptr<LibertyLibrary> src(new LibertyLibrary("ocv_lib", ""));
+  populateLibraryScalars(src.get());
+  populateOcvAndDriverWaveforms(src.get());
+
+  TempCachePath cache_path("/tmp/sta_libcache_ocv.cache");
+  writeLibertyCache(src.get(), cache_path.c_str(), nullptr);
+
+  std::unique_ptr<LibertyLibrary> dst(
+      readLibertyCache(cache_path.c_str(), true, nullptr));
+  ASSERT_NE(dst.get(), nullptr);
+
+  expectOcvAndDriverWaveformsRoundTripped(dst.get());
+}
+
 TEST(LibertyCache, SequentialAndModeDefRoundTrip)
 {
   std::unique_ptr<LibertyLibrary> src(new LibertyLibrary("seq_lib", ""));

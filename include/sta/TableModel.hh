@@ -537,6 +537,8 @@ public:
                  TablePtr waveforms);
   std::string_view name() const { return name_; }
   Table waveform(float slew);
+  // Underlying lookup table (slew × time → voltage). Null if unset.
+  const Table *waveformsTable() const { return waveforms_.get(); }
 
 private:
   std::string name_;

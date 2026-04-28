@@ -249,6 +249,65 @@ writeTableAxis(FILE *f, const TableAxis *axis)
   cache::writeFloatArray(f, values.data(), values.size());
 }
 
+// === Table serialization (commit 4a) =================================
+//
+// Liberty Tables are 0/1/2/3-D float arrays attached to up to three
+// TableAxis values (slew, capacitance, etc.). Larger tables (CCS
+// timing) dominate the on-disk size of a real .lib; each row is
+// streamed as a single length-prefixed float array via writeFloatArray
+// so the parser can later reload it with one fread per row.
+//
+// The "present" bit lets call sites pass a nullable TablePtr / Table*
+// without an extra wrapper.
+
+void
+writeTable(FILE *f, const Table *table)
+{
+  if (table == nullptr) {
+    cache::writeBool(f, false);
+    return;
+  }
+  cache::writeBool(f, true);
+  uint32_t order = static_cast<uint32_t>(table->order());
+  cache::writeU32(f, order);
+  switch (order) {
+  case 0:
+    // Order-0 stores a single float in value_; the public accessor is
+    // value(index1=0, index2=0, index3=0).
+    cache::writeFloat(f, table->value(0, 0, 0));
+    break;
+  case 1: {
+    writeTableAxis(f, table->axis1());
+    const FloatSeq *values = table->values();
+    if (values)
+      cache::writeFloatArray(f, values->data(), values->size());
+    else
+      cache::writeFloatArray(f, nullptr, 0);
+    break;
+  }
+  case 2:
+  case 3: {
+    writeTableAxis(f, table->axis1());
+    writeTableAxis(f, table->axis2());
+    if (order == 3)
+      writeTableAxis(f, table->axis3());
+    // values_table_ is shaped as either axis1.size rows × axis2.size
+    // cols (order 2), or axis1*axis2 rows × axis3 cols (order 3).
+    // Storing the row count + each row's float[] preserves both
+    // layouts without the reader needing to know the shape.
+    const FloatTable *t = const_cast<Table*>(table)->values3();
+    cache::writeU32(f, t ? static_cast<uint32_t>(t->size()) : 0u);
+    if (t) {
+      for (const FloatSeq &row : *t)
+        cache::writeFloatArray(f, row.data(), row.size());
+    }
+    break;
+  }
+  default:
+    cache::error(sta::format("liberty cache: unsupported table order {}", order));
+  }
+}
+
 void
 writeTableTemplates(FILE *f, const LibertyLibrary *lib)
 {
@@ -472,6 +531,44 @@ writeCellPortDetails(FILE *f, const LibertyCell *cell,
 }
 
 void
+writeOcvDerates(FILE *f, const LibertyLibrary *lib)
+{
+  cache::writeSectionId(f, SectionId::OcvDerates);
+  const OcvDerateMap &derate_map = lib->ocvDerateMap();
+  cache::writeU32(f, static_cast<uint32_t>(derate_map.size()));
+  for (const auto &[name, derate] : derate_map) {
+    cache::writeString(f, name);
+    // OcvDerate's derate_ array is keyed by [rise/fall][early/late]
+    // [path_type=clk|data]. Iterate in the same order on read.
+    OcvDerate &mut_derate = const_cast<OcvDerate&>(derate);
+    for (auto rf : RiseFall::range()) {
+      for (auto el : EarlyLate::range()) {
+        for (size_t pt = 0; pt < path_type_count; ++pt) {
+          const Table *t = mut_derate.derateTable(rf, el,
+                                                  static_cast<PathType>(pt));
+          writeTable(f, t);
+        }
+      }
+    }
+  }
+  // Default by name (empty if none).
+  const OcvDerate *def = lib->defaultOcvDerate();
+  cache::writeString(f, def ? def->name() : std::string{});
+}
+
+void
+writeDriverWaveforms(FILE *f, const LibertyLibrary *lib)
+{
+  cache::writeSectionId(f, SectionId::DriverWaveforms);
+  const DriverWaveformMap &dw_map = lib->driverWaveformMap();
+  cache::writeU32(f, static_cast<uint32_t>(dw_map.size()));
+  for (const auto &[name, dw] : dw_map) {
+    cache::writeString(f, name);
+    writeTable(f, dw.waveformsTable());
+  }
+}
+
+void
 writeCells(FILE *f, const LibertyLibrary *lib)
 {
   cache::writeSectionId(f, SectionId::Cells);
@@ -640,6 +737,8 @@ writeLibertyCache(LibertyLibrary *lib,
   writeScaleFactors(f, lib);
   writeSupplyVoltages(f, lib);
   writeTableTemplates(f, lib);
+  writeOcvDerates(f, lib);
+  writeDriverWaveforms(f, lib);
   writeCells(f, lib);
   cache::writeSectionId(f, SectionId::EndMarker);
 }

@@ -62,6 +62,8 @@ enum class SectionId : uint32_t {
   ScaleFactors       = 0x12,
   SupplyVoltages     = 0x13,
   TableTemplates     = 0x14,
+  OcvDerates         = 0x15,
+  DriverWaveforms    = 0x16,
   Cells              = 0x20,
   EndMarker          = 0xFF,
 };
