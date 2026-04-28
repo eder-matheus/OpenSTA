@@ -311,6 +311,102 @@ TEST(LibertyCache, ScalarsRoundTrip)
   expectScalarsRoundTripped(dst.get());
 }
 
+// Populate two cells with distinct metadata. Functions, ports, and
+// timing arcs are deliberately NOT touched here — those land in
+// commits 3b/4. This commit's invariant is just "cell list survives".
+static void
+populateCellMetadata(LibertyLibrary *lib)
+{
+  // Plain combinational cell. The library expects each LibertyCell to
+  // be registered via addCell (see LibertyBuilder::makeCell).
+  LibertyCell *inv = new LibertyCell(lib, "INV", "inv.lib");
+  lib->addCell(inv);
+  inv->setArea(1.5F);
+  inv->setDontUse(false);
+  inv->setIsMacro(false);
+  inv->setIsPad(false);
+  inv->setLeakagePower(0.123F);
+  inv->setFootprint("inv_footprint");
+  inv->setUserFunctionClass("inverter_class");
+  inv->setOcvArcDepth(0.0F);
+
+  // Macro cell with several flags toggled and most string fields set.
+  LibertyCell *macro = new LibertyCell(lib, "MEM_BIG", "mem.lib");
+  lib->addCell(macro);
+  macro->setArea(120.0F);
+  macro->setDontUse(true);
+  macro->setIsMacro(true);
+  macro->setIsMemory(true);
+  macro->setIsClockCell(false);
+  macro->setIsLevelShifter(true);
+  macro->setLevelShifterType(LevelShifterType::HL);
+  macro->setIsIsolationCell(true);
+  macro->setAlwaysOn(true);
+  macro->setSwitchCellType(SwitchCellType::coarse_grain);
+  macro->setInterfaceTiming(true);
+  macro->setClockGateType(ClockGateType::other);
+  macro->setHasInferedRegTimingArcs(true);
+  macro->setOcvArcDepth(3.5F);
+  macro->setFootprint("mem_footprint");
+}
+
+static void
+expectCellMetadataRoundTripped(LibertyLibrary *lib)
+{
+  LibertyCell *inv = lib->findLibertyCell("INV");
+  ASSERT_NE(inv, nullptr);
+  EXPECT_FLOAT_EQ(inv->area(), 1.5F);
+  EXPECT_FALSE(inv->dontUse());
+  EXPECT_FALSE(inv->isMacro());
+  EXPECT_TRUE(inv->leakagePowerExists());
+  float leak = 0;
+  bool exists = false;
+  inv->leakagePower(leak, exists);
+  EXPECT_TRUE(exists);
+  EXPECT_FLOAT_EQ(leak, 0.123F);
+  EXPECT_EQ(inv->footprint(), "inv_footprint");
+  EXPECT_EQ(inv->userFunctionClass(), "inverter_class");
+  EXPECT_EQ(inv->levelShifterType(), LevelShifterType::HL_LH);  // default
+  EXPECT_FALSE(inv->isClockGate());
+
+  LibertyCell *macro = lib->findLibertyCell("MEM_BIG");
+  ASSERT_NE(macro, nullptr);
+  EXPECT_FLOAT_EQ(macro->area(), 120.0F);
+  EXPECT_TRUE(macro->dontUse());
+  EXPECT_TRUE(macro->isMacro());
+  EXPECT_TRUE(macro->isMemory());
+  EXPECT_TRUE(macro->isLevelShifter());
+  EXPECT_EQ(macro->levelShifterType(), LevelShifterType::HL);
+  EXPECT_TRUE(macro->isIsolationCell());
+  EXPECT_TRUE(macro->alwaysOn());
+  EXPECT_EQ(macro->switchCellType(), SwitchCellType::coarse_grain);
+  EXPECT_TRUE(macro->interfaceTiming());
+  EXPECT_TRUE(macro->isClockGateOther());
+  EXPECT_TRUE(macro->isClockGate());
+  EXPECT_TRUE(macro->hasInferedRegTimingArcs());
+  EXPECT_FLOAT_EQ(macro->ocvArcDepth(), 3.5F);
+  EXPECT_EQ(macro->footprint(), "mem_footprint");
+  // leakage was never set on this cell.
+  EXPECT_FALSE(macro->leakagePowerExists());
+}
+
+TEST(LibertyCache, CellMetadataRoundTrip)
+{
+  std::unique_ptr<LibertyLibrary> src(new LibertyLibrary("cell_lib", ""));
+  populateLibraryScalars(src.get());
+  populateCellMetadata(src.get());
+
+  TempCachePath cache_path("/tmp/sta_libcache_cells.cache");
+  writeLibertyCache(src.get(), cache_path.c_str(), nullptr);
+
+  std::unique_ptr<LibertyLibrary> dst(
+      readLibertyCache(cache_path.c_str(), true, nullptr));
+  ASSERT_NE(dst.get(), nullptr);
+
+  expectScalarsRoundTripped(dst.get());
+  expectCellMetadataRoundTripped(dst.get());
+}
+
 TEST(LibertyCache, SharedResourcesRoundTrip)
 {
   std::unique_ptr<LibertyLibrary> src(new LibertyLibrary("shared_lib", ""));

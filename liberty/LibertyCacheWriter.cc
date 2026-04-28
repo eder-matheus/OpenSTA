@@ -258,6 +258,70 @@ writeTableTemplates(FILE *f, const LibertyLibrary *lib)
   }
 }
 
+void
+writeCells(FILE *f, const LibertyLibrary *lib)
+{
+  cache::writeSectionId(f, SectionId::Cells);
+
+  // Two-pass: count, then iterate. The iterator interface doesn't
+  // expose a size, so the count is computed via a quick walk.
+  uint32_t count = 0;
+  {
+    LibertyCellIterator iter(lib);
+    while (iter.hasNext()) {
+      iter.next();
+      ++count;
+    }
+  }
+  cache::writeU32(f, count);
+
+  LibertyCellIterator iter(lib);
+  while (iter.hasNext()) {
+    const LibertyCell *cell = iter.next();
+    cache::writeString(f, cell->name());
+    cache::writeString(f, cell->filename());
+    cache::writeFloat(f, cell->area());
+    cache::writeBool(f, cell->dontUse());
+    cache::writeBool(f, cell->isMacro());
+    cache::writeBool(f, cell->isMemory());
+    cache::writeBool(f, cell->isPad());
+    cache::writeBool(f, cell->isClockCell());
+    cache::writeBool(f, cell->isLevelShifter());
+    cache::writeU32(f, static_cast<uint32_t>(cell->levelShifterType()));
+    cache::writeBool(f, cell->isIsolationCell());
+    cache::writeBool(f, cell->alwaysOn());
+    cache::writeU32(f, static_cast<uint32_t>(cell->switchCellType()));
+    cache::writeBool(f, cell->interfaceTiming());
+
+    // ClockGateType is reachable only via the four predicate getters
+    // (isClockGateLatchPosedge / Negedge / Other / isClockGate); collapse
+    // them back into the underlying enum value for serialization.
+    ClockGateType cgt = ClockGateType::none;
+    if (cell->isClockGateLatchPosedge())      cgt = ClockGateType::latch_posedge;
+    else if (cell->isClockGateLatchNegedge()) cgt = ClockGateType::latch_negedge;
+    else if (cell->isClockGateOther())        cgt = ClockGateType::other;
+    cache::writeU32(f, static_cast<uint32_t>(cgt));
+
+    cache::writeBool(f, cell->hasInferedRegTimingArcs());
+
+    float leakage = 0.0F;
+    bool leakage_exists = false;
+    cell->leakagePower(leakage, leakage_exists);
+    cache::writeFloat(f, leakage);
+    cache::writeBool(f, leakage_exists);
+
+    cache::writeFloat(f, cell->ocvArcDepth());
+    cache::writeString(f, cell->footprint());
+    cache::writeString(f, cell->userFunctionClass());
+
+    // Per-cell scale factor override (library-level entries already
+    // serialized in section ScaleFactors); store by name so the reader
+    // can rebind to the freshly-loaded library map.
+    const ScaleFactors *cell_sf = cell->scaleFactors();
+    cache::writeString(f, cell_sf ? cell_sf->name() : std::string{});
+  }
+}
+
 } // namespace
 
 void
@@ -278,6 +342,7 @@ writeLibertyCache(LibertyLibrary *lib,
   writeScaleFactors(f, lib);
   writeSupplyVoltages(f, lib);
   writeTableTemplates(f, lib);
+  writeCells(f, lib);
   cache::writeSectionId(f, SectionId::EndMarker);
 }
 

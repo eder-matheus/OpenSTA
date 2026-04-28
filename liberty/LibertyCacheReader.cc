@@ -289,6 +289,50 @@ readTableTemplates(FILE *f, LibertyLibrary *lib)
   }
 }
 
+void
+readCells(FILE *f, LibertyLibrary *lib)
+{
+  cache::expectSectionId(f, SectionId::Cells);
+  uint32_t n = cache::readU32(f);
+  for (uint32_t i = 0; i < n; ++i) {
+    std::string name = cache::readString(f);
+    std::string filename = cache::readString(f);
+    // LibertyCell's ctor does not register with its library — the
+    // builder pattern (see LibertyBuilder::makeCell) does that
+    // explicitly. Match that flow so `findLibertyCell` works.
+    LibertyCell *cell = new LibertyCell(lib, name, filename);
+    lib->addCell(cell);
+
+    cell->setArea(cache::readFloat(f));
+    cell->setDontUse(cache::readBool(f));
+    cell->setIsMacro(cache::readBool(f));
+    cell->setIsMemory(cache::readBool(f));
+    cell->setIsPad(cache::readBool(f));
+    cell->setIsClockCell(cache::readBool(f));
+    cell->setIsLevelShifter(cache::readBool(f));
+    cell->setLevelShifterType(static_cast<LevelShifterType>(cache::readU32(f)));
+    cell->setIsIsolationCell(cache::readBool(f));
+    cell->setAlwaysOn(cache::readBool(f));
+    cell->setSwitchCellType(static_cast<SwitchCellType>(cache::readU32(f)));
+    cell->setInterfaceTiming(cache::readBool(f));
+    cell->setClockGateType(static_cast<ClockGateType>(cache::readU32(f)));
+    cell->setHasInferedRegTimingArcs(cache::readBool(f));
+
+    float leakage = cache::readFloat(f);
+    bool leakage_exists = cache::readBool(f);
+    if (leakage_exists)
+      cell->setLeakagePower(leakage);
+
+    cell->setOcvArcDepth(cache::readFloat(f));
+    cell->setFootprint(cache::readString(f));
+    cell->setUserFunctionClass(cache::readString(f));
+
+    std::string sf_name = cache::readString(f);
+    if (!sf_name.empty())
+      cell->setScaleFactors(lib->findScaleFactors(sf_name));
+  }
+}
+
 } // namespace
 
 LibertyLibrary *
@@ -321,6 +365,7 @@ readLibertyCache(const char *filename,
   readScaleFactors(f, lib);
   readSupplyVoltages(f, lib);
   readTableTemplates(f, lib);
+  readCells(f, lib);
 
   cache::expectSectionId(f, SectionId::EndMarker);
   return lib;
