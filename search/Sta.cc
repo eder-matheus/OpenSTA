@@ -65,6 +65,7 @@
 #include "Levelize.hh"
 #include "Liberty.hh"
 #include "LibertyClass.hh"
+#include "LibertyCache.hh"
 #include "LibertyWriter.hh"
 #include "Machine.hh"
 #include "MakeConcreteNetwork.hh"
@@ -704,6 +705,32 @@ Sta::readLiberty(std::string_view filename,
     *units_ = *library->units();
   }
   stats.report("Read liberty");
+  return library;
+}
+
+LibertyLibrary *
+Sta::readLibertyCache(std::string_view filename,
+                      Scene *scene,
+                      const MinMaxAll *min_max,
+                      bool ignore_source_check)
+{
+  Stats stats(debug_, report_);
+  std::string fn(filename);
+  LibertyLibrary *library = sta::readLibertyCache(fn.c_str(),
+                                                  ignore_source_check, this);
+  if (library) {
+    // Mirror Sta::readLiberty's post-load wiring: register as default
+    // (and inherit units) on the first Liberty load, then run the
+    // scene/min_max plumbing so the cached library is interchangeable
+    // with one produced by read_liberty.
+    if (network_->defaultLibertyLibrary() == nullptr) {
+      network_->setDefaultLibertyLibrary(library);
+      *units_ = *library->units();
+    }
+    readLibertyAfter(library, scene, min_max);
+    network_->readLibertyAfter(library);
+  }
+  stats.report("Read liberty cache");
   return library;
 }
 

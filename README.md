@@ -248,6 +248,59 @@ OpenSTA is available in the [default repositories](https://hpc.guix.info/package
   guix install opensta
 ```
 
+## Liberty binary cache
+
+Reading multi-GB CCS-characterized Liberty files can take 25+ minutes
+on every invocation. The binary cache snapshots a parsed
+`LibertyLibrary` to a self-sufficient on-disk artifact that subsequent
+runs reload in seconds, skipping the text parse entirely.
+
+Typical flow:
+
+```tcl
+# One-time: parse the source .lib and snapshot it.
+read_liberty big.lib
+write_liberty_cache [lindex [get_libs *] 0] big.cache
+
+# Subsequent runs: load directly from the cache.
+read_liberty_cache big.cache
+report_checks ...   # exactly as if the .lib had been parsed
+```
+
+The cache is **complementary** to OpenROAD's ODB, not a replacement:
+ODB serializes design state (netlist, placement, routing); the
+Liberty cache serializes technology library state. They cover
+different inputs and can coexist in the same flow.
+
+### `write_liberty_cache library filename`
+
+Writes the in-memory `LibertyLibrary` to a binary cache file. The
+header records the source `.lib` filename, size, and mtime so the
+reader can detect stale caches.
+
+### `read_liberty_cache [-corner corner] [-min] [-max] [-ignore_source_check] filename`
+
+Loads a cached library. By default, errors out if the source `.lib`
+recorded in the cache header has changed (different size or mtime),
+or is missing. Pass `-ignore_source_check` to load anyway -- useful
+for caches distributed without their source.
+
+The cache is tied to the STA build: any STA version mismatch is also
+a hard error. Regenerate the cache when STA is upgraded.
+
+### Format / robustness
+
+- Magic + format-version + endian sentinel + STA-version stamp at the
+  head of every cache. Mismatch on any of these is a hard error.
+- Cross-architecture portability is limited to same-endian platforms.
+- For typical NLDM/CCS commercial libraries the cache covers
+  everything `read_liberty` extracts. Scaled cells (`scaled_cell`
+  groups), scan `test_cell`, bus/bundle ports, and per-port
+  ScaledPortMap are not yet cached.
+
+See [doc/liberty_binary_cache_plan.md](doc/liberty_binary_cache_plan.md)
+for the design and on-disk format.
+
 ## Bug Reports
 
 Use the Issues tab on the github repository to report bugs.

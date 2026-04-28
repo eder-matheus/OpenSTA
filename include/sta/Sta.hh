@@ -152,6 +152,15 @@ public:
                                       Scene *scene,
                                       const MinMaxAll *min_max,
                                       bool infer_latches);
+  // Load a LibertyLibrary from a binary cache produced by
+  // writeLibertyCache. Skips the (multi-minute on large files) Liberty
+  // text parse. Falls through the same default-library / units / scene
+  // wiring as readLiberty so callers can treat the result as
+  // equivalent to a freshly-parsed library.
+  virtual LibertyLibrary *readLibertyCache(std::string_view filename,
+                                           Scene *scene,
+                                           const MinMaxAll *min_max,
+                                           bool ignore_source_check);
   // tmp public
   void readLibertyAfter(LibertyLibrary *liberty,
                         Scene *scene,

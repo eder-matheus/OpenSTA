@@ -2,6 +2,7 @@ sta_module_tests("liberty"
   TESTS
     arc_model_deep
     busport_mem_iter
+    cache_round_trip
     ccsn
     cell_classify_pgpin
     cell_deep

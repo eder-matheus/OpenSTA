@@ -51,6 +51,42 @@ proc write_liberty { args } {
 }
 
 ################################################################
+#
+# Binary cache commands -- skip the multi-minute Liberty parse on
+# subsequent runs by snapshotting a parsed LibertyLibrary to disk and
+# reloading directly. The cache is self-sufficient; the original .lib
+# file is not required at flow runtime.
+#
+# Use:
+#   read_liberty       big.lib                    ;# slow first time
+#   write_liberty_cache [get_libs *]   big.cache  ;# one-time snapshot
+#   read_liberty_cache big.cache                  ;# subsequent runs
+
+define_cmd_args "read_liberty_cache" \
+  {[-corner corner] [-min] [-max] [-ignore_source_check] filename}
+
+proc_redirect read_liberty_cache {
+  parse_key_args "read_liberty_cache" args keys {-corner} \
+    flags {-min -max -ignore_source_check}
+  check_argc_eq1 "read_liberty_cache" $args
+
+  set filename [file nativename [lindex $args 0]]
+  set corner [parse_scene keys]
+  set min_max [parse_min_max_all_flags flags]
+  set ignore_source_check [info exists flags(-ignore_source_check)]
+  read_liberty_cache_cmd $filename $corner $min_max $ignore_source_check
+}
+
+define_cmd_args "write_liberty_cache" {library filename}
+
+proc write_liberty_cache { args } {
+  check_argc_eq2 "write_liberty_cache" $args
+  set library [get_liberty_error "library" [lindex $args 0]]
+  set filename [file nativename [lindex $args 1]]
+  write_liberty_cache_cmd $library $filename
+}
+
+################################################################
 
 define_cmd_args "report_lib_cell" {cell_name [> filename] [>> filename]}
 

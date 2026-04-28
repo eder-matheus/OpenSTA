@@ -27,6 +27,7 @@
 #include "PortDirection.hh"
 #include "Liberty.hh"
 #include "EquivCells.hh"
+#include "LibertyCache.hh"
 #include "LibertyWriter.hh"
 #include "Sta.hh"
 
@@ -129,6 +130,25 @@ write_liberty_cmd(LibertyLibrary *library,
                   char *filename)
 {
   writeLiberty(library, filename, Sta::sta());
+}
+
+bool
+read_liberty_cache_cmd(char *filename,
+                       Scene *scene,
+                       const MinMaxAll *min_max,
+                       bool ignore_source_check)
+{
+  Sta *sta = Sta::sta();
+  LibertyLibrary *lib = sta->readLibertyCache(filename, scene, min_max,
+                                              ignore_source_check);
+  return (lib != nullptr);
+}
+
+void
+write_liberty_cache_cmd(LibertyLibrary *library,
+                        char *filename)
+{
+  writeLibertyCache(library, filename, Sta::sta());
 }
 
 void
