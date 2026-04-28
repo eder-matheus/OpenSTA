@@ -30,8 +30,12 @@
 #include <system_error>
 
 #include "Error.hh"
+#include "FuncExpr.hh"
 #include "Liberty.hh"
 #include "LibertyCacheFormat.hh"
+#include "MinMaxValues.hh"
+#include "PortDirection.hh"
+#include "RiseFallMinMax.hh"
 #include "StaConfig.hh"
 #include "TableModel.hh"
 #include "Transition.hh"
@@ -258,6 +262,213 @@ writeTableTemplates(FILE *f, const LibertyLibrary *lib)
   }
 }
 
+// === Port + FuncExpr helpers (commit 3b) =============================
+//
+// FuncExpr trees can reference any LibertyPort of the owning cell. To
+// keep the format position-independent, every cell writes its full port
+// list first (just names, in iteration order) and we resolve port refs
+// to within-cell indices. The reader rebuilds the same vector and looks
+// up by index.
+
+using PortIndexMap = std::unordered_map<const LibertyPort*, uint32_t>;
+
+void
+writeFuncExpr(FILE *f, const FuncExpr *expr, const PortIndexMap &port_idx)
+{
+  if (expr == nullptr) {
+    cache::writeBool(f, false);
+    return;
+  }
+  cache::writeBool(f, true);
+  cache::writeU32(f, static_cast<uint32_t>(expr->op()));
+  switch (expr->op()) {
+  case FuncExpr::Op::port: {
+    auto it = port_idx.find(expr->port());
+    cache::writeU32(f, it == port_idx.end() ? 0xFFFFFFFFu : it->second);
+    break;
+  }
+  case FuncExpr::Op::not_:
+    writeFuncExpr(f, expr->left(), port_idx);
+    break;
+  case FuncExpr::Op::or_:
+  case FuncExpr::Op::and_:
+  case FuncExpr::Op::xor_:
+    writeFuncExpr(f, expr->left(), port_idx);
+    writeFuncExpr(f, expr->right(), port_idx);
+    break;
+  case FuncExpr::Op::one:
+  case FuncExpr::Op::zero:
+    break;
+  }
+}
+
+// const RiseFall* encoded as 0=null, 1=rise, 2=fall.
+void
+writeRfPtr(FILE *f, const RiseFall *rf)
+{
+  uint8_t code = 0;
+  if (rf == RiseFall::rise()) code = 1;
+  else if (rf == RiseFall::fall()) code = 2;
+  uint32_t v = code;
+  cache::writeU32(f, v);
+}
+
+// Bit-packed flag layout for LibertyPort. Bit positions are stable
+// across format versions; future flags are appended at higher bits.
+enum PortFlagBit : uint32_t {
+  kIsClk           = 1u << 0,
+  kIsRegClk        = 1u << 1,
+  kIsRegOutput     = 1u << 2,
+  kIsLatchData     = 1u << 3,
+  kIsCheckClk      = 1u << 4,
+  kIsClkGateClk    = 1u << 5,
+  kIsClkGateEnable = 1u << 6,
+  kIsClkGateOut    = 1u << 7,
+  kIsPllFeedback   = 1u << 8,
+  kIsolDataIn      = 1u << 9,
+  kIsolEnable      = 1u << 10,
+  kLvlShiftData    = 1u << 11,
+  kIsSwitch        = 1u << 12,
+  kIsPad           = 1u << 13,
+};
+
+uint32_t
+collectPortFlags(const LibertyPort *p)
+{
+  uint32_t flags = 0;
+  if (p->isClock())            flags |= kIsClk;
+  if (p->isRegClk())           flags |= kIsRegClk;
+  if (p->isRegOutput())        flags |= kIsRegOutput;
+  if (p->isLatchData())        flags |= kIsLatchData;
+  if (p->isCheckClk())         flags |= kIsCheckClk;
+  if (p->isClockGateClock())   flags |= kIsClkGateClk;
+  if (p->isClockGateEnable())  flags |= kIsClkGateEnable;
+  if (p->isClockGateOut())     flags |= kIsClkGateOut;
+  if (p->isPllFeedback())      flags |= kIsPllFeedback;
+  if (p->isolationCellData())  flags |= kIsolDataIn;
+  if (p->isolationCellEnable())flags |= kIsolEnable;
+  if (p->levelShifterData())   flags |= kLvlShiftData;
+  if (p->isSwitch())           flags |= kIsSwitch;
+  if (p->isPad())              flags |= kIsPad;
+  return flags;
+}
+
+// Pass 1: write each port's identity (just enough so the reader can
+// construct the LibertyPorts in the same order). Returns the within-
+// cell index map that pass 2 uses for FuncExpr port references.
+PortIndexMap
+writeCellPortHeaders(FILE *f, const LibertyCell *cell)
+{
+  PortIndexMap idx_map;
+  std::vector<const LibertyPort*> ports;
+  // Use the bit-iterator so bus members are visited as individual
+  // ports — bus/bundle support lands in 3c, but iterating bits keeps
+  // the index assignment consistent with what the reader recreates.
+  LibertyCellPortBitIterator iter(cell);
+  while (iter.hasNext())
+    ports.push_back(iter.next());
+  cache::writeU32(f, static_cast<uint32_t>(ports.size()));
+  for (uint32_t i = 0; i < ports.size(); ++i) {
+    cache::writeString(f, ports[i]->name());
+    cache::writeString(f, ports[i]->direction()
+                          ? std::string{ports[i]->direction()->name()}
+                          : std::string{});
+    idx_map[ports[i]] = i;
+  }
+  return idx_map;
+}
+
+void
+writeCellPortDetails(FILE *f, const LibertyCell *cell,
+                     const PortIndexMap &port_idx)
+{
+  std::vector<const LibertyPort*> ports;
+  LibertyCellPortBitIterator iter(cell);
+  while (iter.hasNext())
+    ports.push_back(iter.next());
+
+  for (const LibertyPort *p : ports) {
+    cache::writeU32(f, static_cast<uint32_t>(p->pwrGndType()));
+    cache::writeString(f, p->voltageName());
+    cache::writeU32(f, static_cast<uint32_t>(p->scanSignalType()));
+
+    // capacitance (RiseFallMinMax). LibertyPort caches it inline; we
+    // pull each (rf, mm) slot through the public getter that returns
+    // (value, exists).
+    for (auto rf : RiseFall::range()) {
+      for (auto mm : MinMax::range()) {
+        float val = 0;
+        bool exists = false;
+        p->capacitance(rf, mm, val, exists);
+        cache::writeFloat(f, val);
+        cache::writeBool(f, exists);
+      }
+    }
+
+    // Limits.
+    {
+      float val;
+      bool exists;
+      p->slewLimit(MinMax::min(), val, exists);
+      cache::writeFloat(f, val); cache::writeBool(f, exists);
+      p->slewLimit(MinMax::max(), val, exists);
+      cache::writeFloat(f, val); cache::writeBool(f, exists);
+      p->capacitanceLimit(MinMax::min(), val, exists);
+      cache::writeFloat(f, val); cache::writeBool(f, exists);
+      p->capacitanceLimit(MinMax::max(), val, exists);
+      cache::writeFloat(f, val); cache::writeBool(f, exists);
+      p->fanoutLimit(MinMax::min(), val, exists);
+      cache::writeFloat(f, val); cache::writeBool(f, exists);
+      p->fanoutLimit(MinMax::max(), val, exists);
+      cache::writeFloat(f, val); cache::writeBool(f, exists);
+    }
+    {
+      float fanout_load = 0;
+      bool fanout_load_exists = false;
+      p->fanoutLoad(fanout_load, fanout_load_exists);
+      cache::writeFloat(f, fanout_load);
+      cache::writeBool(f, fanout_load_exists);
+    }
+
+    // min_period.
+    {
+      float val = 0;
+      bool exists = false;
+      p->minPeriod(val, exists);
+      cache::writeFloat(f, val);
+      cache::writeBool(f, exists);
+    }
+    // min_pulse_width per RiseFall.
+    for (auto rf : RiseFall::range()) {
+      float val = 0;
+      bool exists = false;
+      p->minPulseWidth(rf, val, exists);
+      cache::writeFloat(f, val);
+      cache::writeBool(f, exists);
+    }
+
+    writeRfPtr(f, p->pulseClkTrigger());
+    writeRfPtr(f, p->pulseClkSense());
+
+    // Intra-cell related-port references by within-cell index.
+    auto write_port_ref = [&](const LibertyPort *ref) {
+      if (ref == nullptr) {
+        cache::writeU32(f, 0xFFFFFFFFu);
+        return;
+      }
+      auto it = port_idx.find(ref);
+      cache::writeU32(f, it == port_idx.end() ? 0xFFFFFFFFu : it->second);
+    };
+    write_port_ref(p->relatedGroundPort());
+    write_port_ref(p->relatedPowerPort());
+
+    cache::writeU32(f, collectPortFlags(p));
+
+    writeFuncExpr(f, p->function(), port_idx);
+    writeFuncExpr(f, p->tristateEnable(), port_idx);
+  }
+}
+
 void
 writeCells(FILE *f, const LibertyLibrary *lib)
 {
@@ -319,6 +530,11 @@ writeCells(FILE *f, const LibertyLibrary *lib)
     // can rebind to the freshly-loaded library map.
     const ScaleFactors *cell_sf = cell->scaleFactors();
     cache::writeString(f, cell_sf ? cell_sf->name() : std::string{});
+
+    // Two-pass: port headers first so FuncExpr port refs in pass 2
+    // can resolve to within-cell indices.
+    PortIndexMap port_idx = writeCellPortHeaders(f, cell);
+    writeCellPortDetails(f, cell, port_idx);
   }
 }
 

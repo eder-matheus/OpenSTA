@@ -31,7 +31,10 @@
 
 #include <gtest/gtest.h>
 
+#include "FuncExpr.hh"
 #include "Liberty.hh"
+#include "liberty/LibertyBuilder.hh"
+#include "PortDirection.hh"
 #include "TableModel.hh"
 #include "Transition.hh"
 
@@ -388,6 +391,146 @@ expectCellMetadataRoundTripped(LibertyLibrary *lib)
   EXPECT_EQ(macro->footprint(), "mem_footprint");
   // leakage was never set on this cell.
   EXPECT_FALSE(macro->leakagePowerExists());
+}
+
+// Build a 3-port AND cell with assorted port-level state. Used to
+// exercise the new (commit 3b) per-cell port format including the
+// FuncExpr serializer.
+static void
+populateCellWithPorts(LibertyLibrary *lib)
+{
+  LibertyBuilder builder(/*debug=*/nullptr, /*report=*/nullptr);
+  LibertyCell *cell = builder.makeCell(lib, "AND2", "and.lib");
+  cell->setArea(2.0F);
+
+  LibertyPort *a = builder.makePort(cell, "A");
+  LibertyPort *b = builder.makePort(cell, "B");
+  LibertyPort *y = builder.makePort(cell, "Y");
+
+  PortDirection *in_dir = PortDirection::find("input");
+  PortDirection *out_dir = PortDirection::find("output");
+  ASSERT_NE(in_dir, nullptr);
+  ASSERT_NE(out_dir, nullptr);
+  a->setDirection(in_dir);
+  b->setDirection(in_dir);
+  y->setDirection(out_dir);
+
+  // Capacitance with distinct rise/fall × min/max slots.
+  a->setCapacitance(RiseFall::rise(), MinMax::min(), 0.0010F);
+  a->setCapacitance(RiseFall::rise(), MinMax::max(), 0.0020F);
+  a->setCapacitance(RiseFall::fall(), MinMax::min(), 0.0015F);
+  a->setCapacitance(RiseFall::fall(), MinMax::max(), 0.0025F);
+  b->setCapacitance(0.005F);  // single-value: all four slots = 0.005
+  a->setFanoutLoad(1.5F);
+
+  // Limits.
+  y->setSlewLimit(0.5F, MinMax::max());
+  y->setCapacitanceLimit(2.0F, MinMax::max());
+  y->setFanoutLimit(16.0F, MinMax::max());
+
+  // Sequential-ish flags on B + a min_period for variety.
+  b->setIsClock(true);
+  b->setIsRegClk(true);
+  b->setMinPeriod(1.0F);
+  b->setMinPulseWidth(RiseFall::rise(), 0.4F);
+  b->setMinPulseWidth(RiseFall::fall(), 0.5F);
+  b->setPulseClk(RiseFall::rise(), RiseFall::fall());
+  b->setVoltageName("VDD");
+  b->setScanSignalType(ScanSignalType::clock);
+
+  // Function: Y = A AND B. A,B ports need to exist before we wire
+  // the FuncExpr — they do, via the makePort calls above.
+  y->setFunction(FuncExpr::makeAnd(FuncExpr::makePort(a),
+                                   FuncExpr::makePort(b)));
+  // Tristate enable: simple A.
+  y->setTristateEnable(FuncExpr::makePort(a));
+}
+
+static void
+expectCellWithPortsRoundTripped(LibertyLibrary *lib)
+{
+  LibertyCell *cell = lib->findLibertyCell("AND2");
+  ASSERT_NE(cell, nullptr);
+  EXPECT_FLOAT_EQ(cell->area(), 2.0F);
+
+  LibertyPort *a = cell->findLibertyPort("A");
+  LibertyPort *b = cell->findLibertyPort("B");
+  LibertyPort *y = cell->findLibertyPort("Y");
+  ASSERT_NE(a, nullptr);
+  ASSERT_NE(b, nullptr);
+  ASSERT_NE(y, nullptr);
+
+  // Direction.
+  ASSERT_NE(a->direction(), nullptr);
+  EXPECT_EQ(a->direction()->name(), "input");
+  ASSERT_NE(y->direction(), nullptr);
+  EXPECT_EQ(y->direction()->name(), "output");
+
+  // Capacitance.
+  float val;
+  bool exists;
+  a->capacitance(RiseFall::rise(), MinMax::min(), val, exists);
+  EXPECT_TRUE(exists); EXPECT_FLOAT_EQ(val, 0.0010F);
+  a->capacitance(RiseFall::fall(), MinMax::max(), val, exists);
+  EXPECT_TRUE(exists); EXPECT_FLOAT_EQ(val, 0.0025F);
+
+  // Limits.
+  y->slewLimit(MinMax::max(), val, exists);
+  EXPECT_TRUE(exists); EXPECT_FLOAT_EQ(val, 0.5F);
+  y->capacitanceLimit(MinMax::max(), val, exists);
+  EXPECT_TRUE(exists); EXPECT_FLOAT_EQ(val, 2.0F);
+  y->fanoutLimit(MinMax::max(), val, exists);
+  EXPECT_TRUE(exists); EXPECT_FLOAT_EQ(val, 16.0F);
+
+  a->fanoutLoad(val, exists);
+  EXPECT_TRUE(exists); EXPECT_FLOAT_EQ(val, 1.5F);
+
+  // Flags + per-port scalars on B.
+  EXPECT_TRUE(b->isClock());
+  EXPECT_TRUE(b->isRegClk());
+  b->minPeriod(val, exists);
+  EXPECT_TRUE(exists); EXPECT_FLOAT_EQ(val, 1.0F);
+  b->minPulseWidth(RiseFall::rise(), val, exists);
+  EXPECT_TRUE(exists); EXPECT_FLOAT_EQ(val, 0.4F);
+  b->minPulseWidth(RiseFall::fall(), val, exists);
+  EXPECT_TRUE(exists); EXPECT_FLOAT_EQ(val, 0.5F);
+  EXPECT_EQ(b->pulseClkTrigger(), RiseFall::rise());
+  EXPECT_EQ(b->pulseClkSense(),   RiseFall::fall());
+  EXPECT_EQ(b->voltageName(), "VDD");
+  EXPECT_EQ(b->scanSignalType(), ScanSignalType::clock);
+
+  // FuncExpr: Y = A AND B. Verify structure rather than re-comparing
+  // pointers (the loaded ports are different LibertyPort instances).
+  FuncExpr *func = y->function();
+  ASSERT_NE(func, nullptr);
+  EXPECT_EQ(func->op(), FuncExpr::Op::and_);
+  ASSERT_NE(func->left(), nullptr);
+  ASSERT_NE(func->right(), nullptr);
+  EXPECT_EQ(func->left()->op(),  FuncExpr::Op::port);
+  EXPECT_EQ(func->right()->op(), FuncExpr::Op::port);
+  EXPECT_EQ(func->left()->port(),  a);
+  EXPECT_EQ(func->right()->port(), b);
+
+  FuncExpr *tri = y->tristateEnable();
+  ASSERT_NE(tri, nullptr);
+  EXPECT_EQ(tri->op(), FuncExpr::Op::port);
+  EXPECT_EQ(tri->port(), a);
+}
+
+TEST(LibertyCache, CellPortsAndFuncExprRoundTrip)
+{
+  std::unique_ptr<LibertyLibrary> src(new LibertyLibrary("ports_lib", ""));
+  populateLibraryScalars(src.get());
+  populateCellWithPorts(src.get());
+
+  TempCachePath cache_path("/tmp/sta_libcache_ports.cache");
+  writeLibertyCache(src.get(), cache_path.c_str(), nullptr);
+
+  std::unique_ptr<LibertyLibrary> dst(
+      readLibertyCache(cache_path.c_str(), true, nullptr));
+  ASSERT_NE(dst.get(), nullptr);
+
+  expectCellWithPortsRoundTripped(dst.get());
 }
 
 TEST(LibertyCache, CellMetadataRoundTrip)

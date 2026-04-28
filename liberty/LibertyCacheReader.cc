@@ -34,7 +34,11 @@
 #include "Format.hh"
 #include "Liberty.hh"
 #include "LibertyCacheFormat.hh"
+#include "FuncExpr.hh"
+#include "LibertyBuilder.hh"
 #include "Network.hh"
+#include "PortDirection.hh"
+#include "RiseFallMinMax.hh"
 #include "StaConfig.hh"
 #include "TableModel.hh"
 #include "StaState.hh"
@@ -289,6 +293,166 @@ readTableTemplates(FILE *f, LibertyLibrary *lib)
   }
 }
 
+// === Port + FuncExpr helpers (commit 3b) =============================
+//
+// Mirror of the writer-side helpers; see comment block in
+// LibertyCacheWriter.cc.
+
+FuncExpr *
+readFuncExpr(FILE *f, const std::vector<LibertyPort*> &ports)
+{
+  bool present = cache::readBool(f);
+  if (!present)
+    return nullptr;
+  FuncExpr::Op op = static_cast<FuncExpr::Op>(cache::readU32(f));
+  switch (op) {
+  case FuncExpr::Op::port: {
+    uint32_t idx = cache::readU32(f);
+    LibertyPort *port = (idx < ports.size()) ? ports[idx] : nullptr;
+    return FuncExpr::makePort(port);
+  }
+  case FuncExpr::Op::not_:
+    return FuncExpr::makeNot(readFuncExpr(f, ports));
+  case FuncExpr::Op::or_: {
+    FuncExpr *l = readFuncExpr(f, ports);
+    FuncExpr *r = readFuncExpr(f, ports);
+    return FuncExpr::makeOr(l, r);
+  }
+  case FuncExpr::Op::and_: {
+    FuncExpr *l = readFuncExpr(f, ports);
+    FuncExpr *r = readFuncExpr(f, ports);
+    return FuncExpr::makeAnd(l, r);
+  }
+  case FuncExpr::Op::xor_: {
+    FuncExpr *l = readFuncExpr(f, ports);
+    FuncExpr *r = readFuncExpr(f, ports);
+    return FuncExpr::makeXor(l, r);
+  }
+  case FuncExpr::Op::one:
+    return FuncExpr::makeOne();
+  case FuncExpr::Op::zero:
+    return FuncExpr::makeZero();
+  }
+  return nullptr;
+}
+
+const RiseFall *
+readRfPtr(FILE *f)
+{
+  uint32_t code = cache::readU32(f);
+  if (code == 1) return RiseFall::rise();
+  if (code == 2) return RiseFall::fall();
+  return nullptr;
+}
+
+// Pass 1: re-create the cell's ports in the same order the writer
+// emitted them. Returns the per-cell port vector that pass 2 uses for
+// FuncExpr port-reference resolution.
+std::vector<LibertyPort*>
+readCellPortHeaders(FILE *f, LibertyCell *cell, LibertyBuilder &builder)
+{
+  uint32_t n = cache::readU32(f);
+  std::vector<LibertyPort*> ports;
+  ports.reserve(n);
+  for (uint32_t i = 0; i < n; ++i) {
+    std::string name = cache::readString(f);
+    std::string dir_name = cache::readString(f);
+    LibertyPort *port = builder.makePort(cell, name);
+    if (!dir_name.empty()) {
+      PortDirection *dir = PortDirection::find(dir_name.c_str());
+      if (dir) port->setDirection(dir);
+    }
+    ports.push_back(port);
+  }
+  return ports;
+}
+
+void
+readCellPortDetails(FILE *f, const std::vector<LibertyPort*> &ports)
+{
+  for (LibertyPort *p : ports) {
+    p->setPwrGndType(static_cast<PwrGndType>(cache::readU32(f)));
+    p->setVoltageName(cache::readString(f));
+    p->setScanSignalType(static_cast<ScanSignalType>(cache::readU32(f)));
+
+    for (auto rf : RiseFall::range()) {
+      for (auto mm : MinMax::range()) {
+        float val = cache::readFloat(f);
+        bool exists = cache::readBool(f);
+        if (exists) p->setCapacitance(rf, mm, val);
+      }
+    }
+
+    {
+      // Six (slew/cap/fanout) × (min/max) limits.
+      float val; bool exists;
+      val = cache::readFloat(f); exists = cache::readBool(f);
+      if (exists) p->setSlewLimit(val, MinMax::min());
+      val = cache::readFloat(f); exists = cache::readBool(f);
+      if (exists) p->setSlewLimit(val, MinMax::max());
+      val = cache::readFloat(f); exists = cache::readBool(f);
+      if (exists) p->setCapacitanceLimit(val, MinMax::min());
+      val = cache::readFloat(f); exists = cache::readBool(f);
+      if (exists) p->setCapacitanceLimit(val, MinMax::max());
+      val = cache::readFloat(f); exists = cache::readBool(f);
+      if (exists) p->setFanoutLimit(val, MinMax::min());
+      val = cache::readFloat(f); exists = cache::readBool(f);
+      if (exists) p->setFanoutLimit(val, MinMax::max());
+    }
+    {
+      float fanout_load = cache::readFloat(f);
+      bool fanout_load_exists = cache::readBool(f);
+      if (fanout_load_exists) p->setFanoutLoad(fanout_load);
+    }
+    {
+      float val = cache::readFloat(f);
+      bool exists = cache::readBool(f);
+      if (exists) p->setMinPeriod(val);
+    }
+    for (auto rf : RiseFall::range()) {
+      float val = cache::readFloat(f);
+      bool exists = cache::readBool(f);
+      if (exists) p->setMinPulseWidth(rf, val);
+    }
+
+    const RiseFall *trig = readRfPtr(f);
+    const RiseFall *sense = readRfPtr(f);
+    if (trig != nullptr || sense != nullptr)
+      p->setPulseClk(trig, sense);
+
+    // Intra-cell related-port refs.
+    auto resolve_port = [&](uint32_t idx) -> LibertyPort* {
+      if (idx == 0xFFFFFFFFu || idx >= ports.size()) return nullptr;
+      return ports[idx];
+    };
+    LibertyPort *gnd_ref = resolve_port(cache::readU32(f));
+    LibertyPort *pwr_ref = resolve_port(cache::readU32(f));
+    if (gnd_ref) p->setRelatedGroundPort(gnd_ref);
+    if (pwr_ref) p->setRelatedPowerPort(pwr_ref);
+
+    uint32_t flags = cache::readU32(f);
+    if (flags & 0x0001) p->setIsClock(true);
+    if (flags & 0x0002) p->setIsRegClk(true);
+    if (flags & 0x0004) p->setIsRegOutput(true);
+    if (flags & 0x0008) p->setIsLatchData(true);
+    if (flags & 0x0010) p->setIsCheckClk(true);
+    if (flags & 0x0020) p->setIsClockGateClock(true);
+    if (flags & 0x0040) p->setIsClockGateEnable(true);
+    if (flags & 0x0080) p->setIsClockGateOut(true);
+    if (flags & 0x0100) p->setIsPllFeedback(true);
+    if (flags & 0x0200) p->setIsolationCellData(true);
+    if (flags & 0x0400) p->setIsolationCellEnable(true);
+    if (flags & 0x0800) p->setLevelShifterData(true);
+    if (flags & 0x1000) p->setIsSwitch(true);
+    if (flags & 0x2000) p->setIsPad(true);
+
+    FuncExpr *func = readFuncExpr(f, ports);
+    if (func) p->setFunction(func);
+    FuncExpr *tri = readFuncExpr(f, ports);
+    if (tri) p->setTristateEnable(tri);
+  }
+}
+
 void
 readCells(FILE *f, LibertyLibrary *lib)
 {
@@ -330,6 +494,13 @@ readCells(FILE *f, LibertyLibrary *lib)
     std::string sf_name = cache::readString(f);
     if (!sf_name.empty())
       cell->setScaleFactors(lib->findScaleFactors(sf_name));
+
+    // Pass 1: re-create ports in cache order (FuncExprs in pass 2 may
+    // reference any port, including outputs defined "later" in the
+    // cell, so all ports must exist before any FuncExpr is read).
+    LibertyBuilder builder(/*debug=*/nullptr, /*report=*/nullptr);
+    auto ports = readCellPortHeaders(f, cell, builder);
+    readCellPortDetails(f, ports);
   }
 }
 
