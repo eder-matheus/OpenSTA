@@ -40,6 +40,9 @@
 #include "Sequential.hh"
 #include "StaConfig.hh"
 #include "TableModel.hh"
+#include "TimingArc.hh"
+#include "TimingModel.hh"
+#include "TimingRole.hh"
 #include "Transition.hh"
 
 namespace sta {
@@ -530,6 +533,128 @@ writeCellPortDetails(FILE *f, const LibertyCell *cell,
   }
 }
 
+// === Per-arc TableModel / TableModels (commit 4b) ====================
+//
+// TableModel wraps a TablePtr together with a TableTemplate pointer
+// (looked up in the library by name on read), a ScaleFactorType, the
+// RiseFall index, and an is_scaled flag. The is_scaled flag is a
+// runtime PVT-scaling marker that's always false for a freshly-read
+// .lib, so it isn't serialized -- the reader leaves it at default.
+
+void
+writeTableModel(FILE *f, const TableModel *model)
+{
+  if (model == nullptr) {
+    cache::writeBool(f, false);
+    return;
+  }
+  cache::writeBool(f, true);
+  // Template (looked up by name + type on read). Templates are written
+  // in section TableTemplates (commit 2) so are guaranteed to be
+  // available before any cell-section deserialization.
+  TableTemplate *tt = model->tblTemplate();
+  cache::writeString(f, tt ? tt->name() : std::string{});
+  cache::writeU32(f, tt ? static_cast<uint32_t>(tt->type())
+                        : static_cast<uint32_t>(TableTemplateType::delay));
+  cache::writeU32(f, static_cast<uint32_t>(model->scaleFactorType()));
+  cache::writeU32(f, static_cast<uint32_t>(model->rfIndex()));
+  // The wrapped Table itself.
+  writeTable(f, model->table().get());
+}
+
+// TableModels groups the main TableModel with optional OCV variants.
+// Each slot is independently nullable; we write a presence-bit per
+// slot rather than a header bitmask so missing-from-cache combinations
+// stay forward-compatible.
+void
+writeTableModels(FILE *f, const TableModels *models)
+{
+  if (models == nullptr) {
+    cache::writeBool(f, false);
+    return;
+  }
+  cache::writeBool(f, true);
+  writeTableModel(f, models->model());
+  writeTableModel(f, const_cast<TableModels*>(models)->sigma(EarlyLate::early()));
+  writeTableModel(f, const_cast<TableModels*>(models)->sigma(EarlyLate::late()));
+  writeTableModel(f, models->stdDev());
+  writeTableModel(f, models->meanShift());
+  writeTableModel(f, models->skewness());
+}
+
+// Write a TimingModel*. The dispatch to GateTableModel / CheckTableModel
+// is determined by the TimingArcSet's role (set on the read side).
+// Receiver model and OutputWaveforms are deferred to commit 4c.
+void
+writeArcModel(FILE *f, const TimingModel *model, bool is_check)
+{
+  if (model == nullptr) {
+    cache::writeBool(f, false);
+    return;
+  }
+  cache::writeBool(f, true);
+  if (is_check) {
+    const CheckTableModel *cm = static_cast<const CheckTableModel*>(model);
+    writeTableModels(f, cm->checkModels());
+  }
+  else {
+    const GateTableModel *gm = static_cast<const GateTableModel*>(model);
+    writeTableModels(f, gm->delayModels());
+    writeTableModels(f, gm->slewModels());
+  }
+}
+
+// === TimingArcSet section (commit 4b) ================================
+
+void
+writeTimingArcSets(FILE *f, const LibertyCell *cell, const PortIndexMap &port_idx)
+{
+  const TimingArcSetSeq &sets = cell->timingArcSets();
+  cache::writeU32(f, static_cast<uint32_t>(sets.size()));
+  auto write_port_ref = [&](const LibertyPort *p) {
+    if (p == nullptr) {
+      cache::writeU32(f, 0xFFFFFFFFu);
+      return;
+    }
+    auto it = port_idx.find(p);
+    cache::writeU32(f, it == port_idx.end() ? 0xFFFFFFFFu : it->second);
+  };
+  for (const TimingArcSet *set : sets) {
+    write_port_ref(set->from());
+    write_port_ref(set->to());
+    write_port_ref(set->relatedOut());
+    cache::writeString(f, std::string{set->role()->to_string()});
+    cache::writeBool(f, set->isCondDefault());
+
+    // Attrs.
+    cache::writeU32(f, static_cast<uint32_t>(set->timingType()));
+    cache::writeU32(f, static_cast<uint32_t>(set->sense()));
+    writeFuncExpr(f, set->cond(), port_idx);
+    cache::writeString(f, set->sdfCondStart());  // also serves as sdfCond
+    cache::writeString(f, set->sdfCondEnd());
+    cache::writeString(f, set->modeName());
+    cache::writeString(f, set->modeValue());
+    cache::writeFloat(f, set->ocvArcDepth());
+
+    // Per-RF model in attrs (rise/fall slots). Concrete type is
+    // determined by the role.
+    bool is_check = set->role()->isTimingCheck();
+    for (auto rf : RiseFall::range())
+      writeArcModel(f, set->model(rf), is_check);
+
+    // Arcs. Each arc records its from/to Transition; the model is
+    // implicitly the attrs slot for the arc's from-edge. For special
+    // 3-state transitions (Z/X) the asRiseFall() is null; we still
+    // serialize the Transition by name so the reader can recover.
+    const TimingArcSeq &arcs = set->arcs();
+    cache::writeU32(f, static_cast<uint32_t>(arcs.size()));
+    for (const TimingArc *arc : arcs) {
+      cache::writeString(f, std::string{arc->fromEdge()->to_string()});
+      cache::writeString(f, std::string{arc->toEdge()->to_string()});
+    }
+  }
+}
+
 void
 writeOcvDerates(FILE *f, const LibertyLibrary *lib)
 {
@@ -714,6 +839,9 @@ writeCells(FILE *f, const LibertyLibrary *lib)
           cache::writeU32(f, static_cast<uint32_t>(v));
       }
     }
+
+    // === Timing arc sets (commit 4b) ================================
+    writeTimingArcSets(f, cell, port_idx);
   }
 }
 

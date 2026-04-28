@@ -43,6 +43,9 @@
 #include "Sequential.hh"
 #include "StaConfig.hh"
 #include "TableModel.hh"
+#include "TimingArc.hh"
+#include "TimingModel.hh"
+#include "TimingRole.hh"
 #include "StaState.hh"
 #include "Transition.hh"
 
@@ -500,6 +503,131 @@ readCellPortDetails(FILE *f, const std::vector<LibertyPort*> &ports)
   }
 }
 
+// === Per-arc TableModel / TableModels read (commit 4b) ===============
+
+TableModel *
+readTableModel(FILE *f, LibertyLibrary *lib)
+{
+  bool present = cache::readBool(f);
+  if (!present)
+    return nullptr;
+  std::string template_name = cache::readString(f);
+  TableTemplateType template_type =
+      static_cast<TableTemplateType>(cache::readU32(f));
+  ScaleFactorType sft = static_cast<ScaleFactorType>(cache::readU32(f));
+  uint32_t rf_index = cache::readU32(f);
+  TablePtr table = readTablePtr(f);
+
+  TableTemplate *tt = template_name.empty()
+      ? nullptr
+      : lib->findTableTemplate(template_name, template_type);
+  const RiseFall *rf = (rf_index == RiseFall::riseIndex())
+      ? RiseFall::rise()
+      : RiseFall::fall();
+  return new TableModel(std::move(table), tt, sft, rf);
+}
+
+TableModels *
+readTableModels(FILE *f, LibertyLibrary *lib)
+{
+  bool present = cache::readBool(f);
+  if (!present)
+    return nullptr;
+  TableModel *m = readTableModel(f, lib);
+  TableModels *models = new TableModels(m);
+  TableModel *sigma_early = readTableModel(f, lib);
+  TableModel *sigma_late  = readTableModel(f, lib);
+  if (sigma_early) models->setSigma(sigma_early, EarlyLate::early());
+  if (sigma_late)  models->setSigma(sigma_late,  EarlyLate::late());
+  TableModel *std_dev    = readTableModel(f, lib);
+  TableModel *mean_shift = readTableModel(f, lib);
+  TableModel *skewness   = readTableModel(f, lib);
+  if (std_dev)    models->setStdDev(std_dev);
+  if (mean_shift) models->setMeanShift(mean_shift);
+  if (skewness)   models->setSkewness(skewness);
+  return models;
+}
+
+TimingModel *
+readArcModel(FILE *f, LibertyLibrary *lib, LibertyCell *cell, bool is_check)
+{
+  bool present = cache::readBool(f);
+  if (!present)
+    return nullptr;
+  if (is_check) {
+    TableModels *check_models = readTableModels(f, lib);
+    return new CheckTableModel(cell, check_models);
+  }
+  TableModels *delay_models = readTableModels(f, lib);
+  TableModels *slew_models  = readTableModels(f, lib);
+  // ReceiverModel and OutputWaveforms remain null until commit 4c
+  // wires up the CCS sections.
+  return new GateTableModel(cell, delay_models, slew_models);
+}
+
+void
+readTimingArcSets(FILE *f, LibertyLibrary *lib, LibertyCell *cell,
+                  const std::vector<LibertyPort*> &ports)
+{
+  uint32_t set_count = cache::readU32(f);
+  auto resolve_port = [&](uint32_t idx) -> LibertyPort* {
+    if (idx == 0xFFFFFFFFu || idx >= ports.size()) return nullptr;
+    return ports[idx];
+  };
+  for (uint32_t s = 0; s < set_count; ++s) {
+    LibertyPort *from        = resolve_port(cache::readU32(f));
+    LibertyPort *to          = resolve_port(cache::readU32(f));
+    LibertyPort *related_out = resolve_port(cache::readU32(f));
+    std::string role_name = cache::readString(f);
+    bool is_cond_default  = cache::readBool(f);
+
+    const TimingRole *role = TimingRole::find(role_name.c_str());
+    bool is_check = role ? role->isTimingCheck() : false;
+
+    TimingArcAttrsPtr attrs = std::make_shared<TimingArcAttrs>();
+    attrs->setTimingType(static_cast<TimingType>(cache::readU32(f)));
+    attrs->setTimingSense(static_cast<TimingSense>(cache::readU32(f)));
+    if (FuncExpr *cond = readFuncExpr(f, ports))
+      attrs->setCond(cond);
+    std::string sdf_cond_start = cache::readString(f);
+    std::string sdf_cond_end   = cache::readString(f);
+    if (!sdf_cond_start.empty())
+      attrs->setSdfCondStart(sdf_cond_start);
+    if (!sdf_cond_end.empty())
+      attrs->setSdfCondEnd(sdf_cond_end);
+    std::string mode_name  = cache::readString(f);
+    std::string mode_value = cache::readString(f);
+    if (!mode_name.empty())  attrs->setModeName(mode_name);
+    if (!mode_value.empty()) attrs->setModeValue(mode_value);
+    attrs->setOcvArcDepth(cache::readFloat(f));
+
+    // Per-RF model. attrs takes ownership of the TimingModel pointers.
+    for (auto rf : RiseFall::range()) {
+      TimingModel *m = readArcModel(f, lib, cell, is_check);
+      if (m) attrs->setModel(rf, m);
+    }
+
+    TimingArcSet *set = cell->makeTimingArcSet(from, to, related_out,
+                                               role, attrs);
+    set->setIsCondDefault(is_cond_default);
+
+    // Arcs.
+    uint32_t arc_count = cache::readU32(f);
+    for (uint32_t a = 0; a < arc_count; ++a) {
+      std::string from_rf_name = cache::readString(f);
+      std::string to_rf_name   = cache::readString(f);
+      const Transition *from_t = Transition::find(from_rf_name);
+      const Transition *to_t   = Transition::find(to_rf_name);
+      // The arc's model is whichever attrs slot matches the from-edge.
+      TimingModel *model = nullptr;
+      if (from_t && from_t->asRiseFall())
+        model = attrs->model(from_t->asRiseFall());
+      TimingArc *arc = new TimingArc(set, from_t, to_t, model);
+      set->addTimingArc(arc);
+    }
+  }
+}
+
 void
 readOcvDerates(FILE *f, LibertyLibrary *lib)
 {
@@ -673,6 +801,9 @@ readCells(FILE *f, LibertyLibrary *lib)
       }
       cell->makeStatetable(in_ports, int_ports, rows);
     }
+
+    // Timing arc sets (commit 4b).
+    readTimingArcSets(f, lib, cell, ports);
   }
 }
 

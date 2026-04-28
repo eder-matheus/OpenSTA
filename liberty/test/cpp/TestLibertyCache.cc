@@ -38,6 +38,9 @@
 #include "PortDirection.hh"
 #include "Sequential.hh"
 #include "TableModel.hh"
+#include "TimingArc.hh"
+#include "TimingModel.hh"
+#include "TimingRole.hh"
 #include "Transition.hh"
 
 namespace sta {
@@ -718,6 +721,151 @@ expectOcvAndDriverWaveformsRoundTripped(LibertyLibrary *lib)
   EXPECT_EQ(wf_table->axis2()->values().size(), 3u);
   EXPECT_FLOAT_EQ(wf_table->value(0, 2), 0.9F);
   EXPECT_FLOAT_EQ(wf_table->value(1, 1), 0.4F);
+}
+
+// Build a 2D NLDM-style TableModel: input slew × output cap → delay.
+static TableModel *
+makeDelayTableModel(LibertyLibrary *lib, const RiseFall *rf,
+                    std::vector<float> slew_pts,
+                    std::vector<float> cap_pts,
+                    std::vector<std::vector<float>> values)
+{
+  // Reuse / find the delay template if it exists; create otherwise.
+  TableTemplate *tt = lib->findTableTemplate("delay_2d", TableTemplateType::delay);
+  if (tt == nullptr) {
+    tt = lib->makeTableTemplate("delay_2d", TableTemplateType::delay);
+    FloatSeq slew_axis(slew_pts.begin(), slew_pts.end());
+    FloatSeq cap_axis (cap_pts.begin(),  cap_pts.end());
+    tt->setAxis1(std::make_shared<TableAxis>(
+        TableAxisVariable::input_net_transition, std::move(slew_axis)));
+    tt->setAxis2(std::make_shared<TableAxis>(
+        TableAxisVariable::total_output_net_capacitance, std::move(cap_axis)));
+  }
+  TablePtr table = make2DTable(TableAxisVariable::input_net_transition,
+                               slew_pts,
+                               TableAxisVariable::total_output_net_capacitance,
+                               cap_pts, values);
+  return new TableModel(std::move(table), tt, ScaleFactorType::cell, rf);
+}
+
+static void
+populateCellWithTimingArc(LibertyLibrary *lib)
+{
+  LibertyBuilder builder(/*debug=*/nullptr, /*report=*/nullptr);
+  LibertyCell *cell = builder.makeCell(lib, "BUF", "buf.lib");
+  PortDirection *in_dir = PortDirection::find("input");
+  PortDirection *out_dir = PortDirection::find("output");
+  LibertyPort *a = builder.makePort(cell, "A");
+  LibertyPort *y = builder.makePort(cell, "Y");
+  a->setDirection(in_dir);
+  y->setDirection(out_dir);
+
+  // Two-row × two-col delay tables for rise and fall edges.
+  TableModel *rise_delay = makeDelayTableModel(lib, RiseFall::rise(),
+      {0.01F, 0.05F},
+      {0.005F, 0.050F},
+      {{0.10F, 0.20F},
+       {0.15F, 0.30F}});
+  TableModel *fall_delay = makeDelayTableModel(lib, RiseFall::fall(),
+      {0.01F, 0.05F},
+      {0.005F, 0.050F},
+      {{0.12F, 0.22F},
+       {0.18F, 0.34F}});
+  // Slew tables (just reuse the same shape with different values).
+  TableModel *rise_slew = makeDelayTableModel(lib, RiseFall::rise(),
+      {0.01F, 0.05F},
+      {0.005F, 0.050F},
+      {{0.05F, 0.10F},
+       {0.08F, 0.15F}});
+  TableModel *fall_slew = makeDelayTableModel(lib, RiseFall::fall(),
+      {0.01F, 0.05F},
+      {0.005F, 0.050F},
+      {{0.06F, 0.11F},
+       {0.09F, 0.16F}});
+
+  TimingArcAttrsPtr attrs = std::make_shared<TimingArcAttrs>();
+  attrs->setTimingType(TimingType::combinational);
+  attrs->setTimingSense(TimingSense::positive_unate);
+  attrs->setModel(RiseFall::rise(),
+                  new GateTableModel(cell,
+                                     new TableModels(rise_delay),
+                                     new TableModels(rise_slew)));
+  attrs->setModel(RiseFall::fall(),
+                  new GateTableModel(cell,
+                                     new TableModels(fall_delay),
+                                     new TableModels(fall_slew)));
+
+  TimingArcSet *set = cell->makeTimingArcSet(a, y, /*related_out=*/nullptr,
+                                             TimingRole::combinational(),
+                                             attrs);
+  set->addTimingArc(new TimingArc(set, Transition::rise(), Transition::rise(),
+                                  attrs->model(RiseFall::rise())));
+  set->addTimingArc(new TimingArc(set, Transition::fall(), Transition::fall(),
+                                  attrs->model(RiseFall::fall())));
+}
+
+static void
+expectCellWithTimingArcRoundTripped(LibertyLibrary *lib)
+{
+  LibertyCell *cell = lib->findLibertyCell("BUF");
+  ASSERT_NE(cell, nullptr);
+  const TimingArcSetSeq &sets = cell->timingArcSets();
+  ASSERT_EQ(sets.size(), 1u);
+  const TimingArcSet *set = sets[0];
+
+  ASSERT_NE(set->from(), nullptr);
+  ASSERT_NE(set->to(), nullptr);
+  EXPECT_EQ(set->from()->name(), "A");
+  EXPECT_EQ(set->to()->name(),   "Y");
+  EXPECT_EQ(set->relatedOut(), nullptr);
+  EXPECT_EQ(set->role(), TimingRole::combinational());
+  EXPECT_EQ(set->timingType(), TimingType::combinational);
+
+  // Two arcs, rise→rise and fall→fall.
+  const TimingArcSeq &arcs = set->arcs();
+  ASSERT_EQ(arcs.size(), 2u);
+  EXPECT_EQ(arcs[0]->fromEdge(), Transition::rise());
+  EXPECT_EQ(arcs[0]->toEdge(),   Transition::rise());
+  EXPECT_EQ(arcs[1]->fromEdge(), Transition::fall());
+  EXPECT_EQ(arcs[1]->toEdge(),   Transition::fall());
+
+  // Each arc points to the appropriate attrs model.
+  ASSERT_NE(arcs[0]->model(), nullptr);
+  ASSERT_NE(arcs[1]->model(), nullptr);
+
+  const GateTableModel *rise_gm =
+      static_cast<const GateTableModel*>(arcs[0]->model());
+  ASSERT_NE(rise_gm->delayModels(), nullptr);
+  const TableModel *rise_delay = rise_gm->delayModels()->model();
+  ASSERT_NE(rise_delay, nullptr);
+  ASSERT_NE(rise_delay->table().get(), nullptr);
+  EXPECT_EQ(rise_delay->order(), 2);
+  // Spot-check a value.
+  EXPECT_FLOAT_EQ(rise_delay->table()->value(0u, 0u), 0.10F);
+  EXPECT_FLOAT_EQ(rise_delay->table()->value(1u, 1u), 0.30F);
+
+  const GateTableModel *fall_gm =
+      static_cast<const GateTableModel*>(arcs[1]->model());
+  ASSERT_NE(fall_gm->slewModels(), nullptr);
+  const TableModel *fall_slew = fall_gm->slewModels()->model();
+  ASSERT_NE(fall_slew, nullptr);
+  EXPECT_FLOAT_EQ(fall_slew->table()->value(1u, 0u), 0.09F);
+}
+
+TEST(LibertyCache, TimingArcSetRoundTrip)
+{
+  std::unique_ptr<LibertyLibrary> src(new LibertyLibrary("arc_lib", ""));
+  populateLibraryScalars(src.get());
+  populateCellWithTimingArc(src.get());
+
+  TempCachePath cache_path("/tmp/sta_libcache_arc.cache");
+  writeLibertyCache(src.get(), cache_path.c_str(), nullptr);
+
+  std::unique_ptr<LibertyLibrary> dst(
+      readLibertyCache(cache_path.c_str(), true, nullptr));
+  ASSERT_NE(dst.get(), nullptr);
+
+  expectCellWithTimingArcRoundTripped(dst.get());
 }
 
 TEST(LibertyCache, OcvAndDriverWaveformsRoundTrip)
