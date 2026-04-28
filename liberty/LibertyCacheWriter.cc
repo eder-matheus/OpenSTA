@@ -1,0 +1,184 @@
+// OpenSTA, Static Timing Analyzer
+// Copyright (c) 2026, Parallax Software, Inc.
+//
+// This program is free software: you can redistribute it and/or modify
+// it under the terms of the GNU General Public License as published by
+// the Free Software Foundation, either version 3 of the License, or
+// (at your option) any later version.
+//
+// This program is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+// GNU General Public License for more details.
+//
+// You should have received a copy of the GNU General Public License
+// along with this program. If not, see <https://www.gnu.org/licenses/>.
+//
+// The origin of this software must not be misrepresented; you must not
+// claim that you wrote the original software.
+//
+// Altered source versions must be plainly marked as such, and must not be
+// misrepresented as being the original software.
+//
+// This notice may not be removed or altered from any source distribution.
+
+#include "LibertyCache.hh"
+
+#include <cstdio>
+#include <filesystem>
+#include <memory>
+#include <system_error>
+
+#include "Error.hh"
+#include "Liberty.hh"
+#include "LibertyCacheFormat.hh"
+#include "StaConfig.hh"
+#include "Transition.hh"
+
+namespace sta {
+
+using cache::SectionId;
+
+namespace {
+
+// Capture (size, mtime) of the source .lib path stamped in the cache
+// header. If the file is unreachable at write time, we record zero
+// metadata; the reader will be unable to validate staleness in that
+// case, which is consistent with users intentionally dropping the
+// source after caching.
+struct SourceMetadata
+{
+  uint64_t size = 0;
+  int64_t mtime = 0;
+};
+
+SourceMetadata
+sourceMetadata(const std::string &filename)
+{
+  SourceMetadata md;
+  if (filename.empty())
+    return md;
+  std::error_code ec;
+  std::filesystem::path path{filename};
+  auto sz = std::filesystem::file_size(path, ec);
+  if (!ec)
+    md.size = static_cast<uint64_t>(sz);
+  auto ftime = std::filesystem::last_write_time(path, ec);
+  if (!ec)
+    md.mtime = std::chrono::duration_cast<std::chrono::seconds>(
+                 ftime.time_since_epoch()).count();
+  return md;
+}
+
+void
+writeHeader(FILE *f, const LibertyLibrary *lib)
+{
+  cache::writeU32(f, cache::kMagic);
+  cache::writeU32(f, cache::kFormatVersion);
+  cache::writeU32(f, cache::kEndianSentinel);
+  cache::writeU32(f, cache::kFlagsNone);
+  cache::writeString(f, STA_VERSION);
+  cache::writeString(f, lib->filename());
+  SourceMetadata md = sourceMetadata(lib->filename());
+  cache::writeU64(f, md.size);
+  cache::writeI64(f, md.mtime);
+}
+
+void
+writeLibraryHeader(FILE *f, const LibertyLibrary *lib)
+{
+  cache::writeSectionId(f, SectionId::LibraryHeader);
+  cache::writeString(f, lib->name());
+  cache::writeString(f, lib->filename());
+  cache::writeU32(f, static_cast<uint32_t>(lib->delayModelType()));
+}
+
+void
+writeLibraryScalars(FILE *f, const LibertyLibrary *lib)
+{
+  cache::writeSectionId(f, SectionId::LibraryScalars);
+
+  cache::writeFloat(f, lib->nominalProcess());
+  cache::writeFloat(f, lib->nominalVoltage());
+  cache::writeFloat(f, lib->nominalTemperature());
+  cache::writeFloat(f, lib->ocvArcDepth());
+
+  cache::writeFloat(f, lib->defaultInputPinCap());
+  cache::writeFloat(f, lib->defaultOutputPinCap());
+  cache::writeFloat(f, lib->defaultBidirectPinCap());
+  cache::writeFloat(f, lib->slewDerateFromLibrary());
+
+  for (auto rf : RiseFall::range())
+    cache::writeFloat(f, lib->inputThreshold(rf));
+  for (auto rf : RiseFall::range())
+    cache::writeFloat(f, lib->outputThreshold(rf));
+  for (auto rf : RiseFall::range())
+    cache::writeFloat(f, lib->slewLowerThreshold(rf));
+  for (auto rf : RiseFall::range())
+    cache::writeFloat(f, lib->slewUpperThreshold(rf));
+
+  // Default intrinsic and pin resistances are RiseFallValues so that
+  // each rise/fall slot tracks both a value and a "present" flag.
+  for (auto rf : RiseFall::range()) {
+    float value;
+    bool exists;
+    lib->defaultIntrinsic(rf, value, exists);
+    cache::writeFloat(f, value);
+    cache::writeBool(f, exists);
+  }
+  for (auto rf : RiseFall::range()) {
+    float value;
+    bool exists;
+    lib->defaultBidirectPinRes(rf, value, exists);
+    cache::writeFloat(f, value);
+    cache::writeBool(f, exists);
+  }
+  for (auto rf : RiseFall::range()) {
+    float value;
+    bool exists;
+    lib->defaultOutputPinRes(rf, value, exists);
+    cache::writeFloat(f, value);
+    cache::writeBool(f, exists);
+  }
+
+  // Library-wide caps/limits: the four "default_max_*" + fanout_load.
+  // Each is a (float, bool) pair tracking whether the .lib actually
+  // specified the field.
+  float fval;
+  bool exists;
+  lib->defaultFanoutLoad(fval, exists);
+  cache::writeFloat(f, fval);
+  cache::writeBool(f, exists);
+
+  lib->defaultMaxCapacitance(fval, exists);
+  cache::writeFloat(f, fval);
+  cache::writeBool(f, exists);
+
+  lib->defaultMaxFanout(fval, exists);
+  cache::writeFloat(f, fval);
+  cache::writeBool(f, exists);
+
+  lib->defaultMaxSlew(fval, exists);
+  cache::writeFloat(f, fval);
+  cache::writeBool(f, exists);
+}
+
+} // namespace
+
+void
+writeLibertyCache(LibertyLibrary *lib,
+                  const char *filename,
+                  StaState * /*sta*/)
+{
+  std::unique_ptr<FILE, int(*)(FILE*)> out(fopen(filename, "wb"), &fclose);
+  if (!out)
+    throw FileNotWritable(filename);
+
+  FILE *f = out.get();
+  writeHeader(f, lib);
+  writeLibraryHeader(f, lib);
+  writeLibraryScalars(f, lib);
+  cache::writeSectionId(f, SectionId::EndMarker);
+}
+
+} // namespace sta

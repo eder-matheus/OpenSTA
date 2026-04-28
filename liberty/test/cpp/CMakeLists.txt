@@ -21,6 +21,7 @@ sta_cpp_test(TestLibertyClasses)
 sta_cpp_test(TestLibertyStaBasics)
 sta_cpp_test(TestLibertyStaBasicsB)
 sta_cpp_test(TestLibertyStaCallbacks)
+sta_cpp_test(TestLibertyCache)
 
 # Compatibility aggregate target for legacy scripts that still build TestLiberty.
 add_custom_target(TestLiberty
@@ -29,4 +30,5 @@ add_custom_target(TestLiberty
     TestLibertyStaBasics
     TestLibertyStaBasicsB
     TestLibertyStaCallbacks
+    TestLibertyCache
 )
