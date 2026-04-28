@@ -35,6 +35,8 @@
 #include "Liberty.hh"
 #include "LibertyCacheFormat.hh"
 #include "FuncExpr.hh"
+#include "InternalPower.hh"
+#include "LeakagePower.hh"
 #include "LibertyBuilder.hh"
 #include "NetworkClass.hh"
 #include "Network.hh"
@@ -54,6 +56,11 @@ namespace sta {
 using cache::SectionId;
 
 namespace {
+
+// Forward declarations for the CCS helpers in the timing-arc block;
+// readCellPortCcs (introduced in commit 4c) needs them earlier in the
+// file than where the timing-arc helpers live.
+ReceiverModelPtr readReceiverModel(FILE *f, LibertyLibrary *lib);
 
 void
 readHeader(FILE *f,
@@ -503,6 +510,26 @@ readCellPortDetails(FILE *f, const std::vector<LibertyPort*> &ports)
   }
 }
 
+// Per-port ReceiverModel + DriverWaveform refs (commit 4c). Called as
+// a follow-up to readCellPortDetails; the LibertyLibrary is needed
+// for DriverWaveform name lookup.
+void
+readCellPortCcs(FILE *f, LibertyLibrary *lib,
+                const std::vector<LibertyPort*> &ports)
+{
+  for (LibertyPort *p : ports) {
+    ReceiverModelPtr rm = readReceiverModel(f, lib);
+    if (rm) p->setReceiverModel(std::move(rm));
+    for (auto rf : RiseFall::range()) {
+      std::string dw_name = cache::readString(f);
+      if (!dw_name.empty()) {
+        if (DriverWaveform *dw = lib->findDriverWaveform(dw_name))
+          p->setDriverWaveform(dw, rf);
+      }
+    }
+  }
+}
+
 // === Per-arc TableModel / TableModels read (commit 4b) ===============
 
 TableModel *
@@ -548,6 +575,70 @@ readTableModels(FILE *f, LibertyLibrary *lib)
   return models;
 }
 
+// === ReceiverModel + OutputWaveforms read (commit 4c) ================
+
+ReceiverModelPtr
+readReceiverModel(FILE *f, LibertyLibrary *lib)
+{
+  bool present = cache::readBool(f);
+  if (!present)
+    return nullptr;
+  uint32_t n = cache::readU32(f);
+  auto rm = std::make_shared<ReceiverModel>();
+  for (uint32_t i = 0; i < n; ++i) {
+    bool tm_present = cache::readBool(f);
+    if (!tm_present) {
+      // The slot was a default-constructed (empty) TableModel on the
+      // write side. Skip; setCapacitanceModel only runs for valid
+      // entries below.
+      continue;
+    }
+    // Read a TableModel inline.
+    std::string template_name = cache::readString(f);
+    TableTemplateType template_type =
+        static_cast<TableTemplateType>(cache::readU32(f));
+    ScaleFactorType sft = static_cast<ScaleFactorType>(cache::readU32(f));
+    uint32_t rf_index = cache::readU32(f);
+    TablePtr table = readTablePtr(f);
+    TableTemplate *tt = template_name.empty()
+        ? nullptr
+        : lib->findTableTemplate(template_name, template_type);
+    const RiseFall *rf = (rf_index == RiseFall::riseIndex())
+        ? RiseFall::rise() : RiseFall::fall();
+    TableModel tm(std::move(table), tt, sft, rf);
+    rm->setCapacitanceModel(std::move(tm),
+                            /*segment=*/i / RiseFall::index_count, rf);
+  }
+  return rm;
+}
+
+OutputWaveforms *
+readOutputWaveforms(FILE *f)
+{
+  bool present = cache::readBool(f);
+  if (!present)
+    return nullptr;
+  uint32_t rf_index = cache::readU32(f);
+  const RiseFall *rf = (rf_index == RiseFall::riseIndex())
+      ? RiseFall::rise() : RiseFall::fall();
+  TableAxisPtr slew_axis = readTableAxis(f);
+  TableAxisPtr cap_axis  = readTableAxis(f);
+  uint32_t wf_count = cache::readU32(f);
+  Table1Seq waveforms;
+  waveforms.reserve(wf_count);
+  for (uint32_t i = 0; i < wf_count; ++i) {
+    TablePtr t = readTablePtr(f);
+    // OutputWaveforms takes raw Table* and assumes ownership; we lift
+    // out of the shared_ptr (release-style). The cache reader is the
+    // sole owner of these freshly-allocated tables.
+    waveforms.push_back(t ? new Table(std::move(*t)) : new Table());
+  }
+  TablePtr ref_table_ptr = readTablePtr(f);
+  Table ref_times = ref_table_ptr ? std::move(*ref_table_ptr) : Table();
+  return new OutputWaveforms(slew_axis, cap_axis, rf,
+                             waveforms, std::move(ref_times));
+}
+
 TimingModel *
 readArcModel(FILE *f, LibertyLibrary *lib, LibertyCell *cell, bool is_check)
 {
@@ -560,8 +651,11 @@ readArcModel(FILE *f, LibertyLibrary *lib, LibertyCell *cell, bool is_check)
   }
   TableModels *delay_models = readTableModels(f, lib);
   TableModels *slew_models  = readTableModels(f, lib);
-  // ReceiverModel and OutputWaveforms remain null until commit 4c
-  // wires up the CCS sections.
+  ReceiverModelPtr receiver_model = readReceiverModel(f, lib);
+  OutputWaveforms *output_waveforms = readOutputWaveforms(f);
+  if (receiver_model || output_waveforms)
+    return new GateTableModel(cell, delay_models, slew_models,
+                              receiver_model, output_waveforms);
   return new GateTableModel(cell, delay_models, slew_models);
 }
 
@@ -712,6 +806,7 @@ readCells(FILE *f, LibertyLibrary *lib)
     LibertyBuilder builder(/*debug=*/nullptr, /*report=*/nullptr);
     auto ports = readCellPortHeaders(f, cell, builder);
     readCellPortDetails(f, ports);
+    readCellPortCcs(f, lib, ports);
 
     // Helpers for the structures that follow (commit 3c).
     auto resolve_port = [&](uint32_t idx) -> LibertyPort* {
@@ -804,6 +899,41 @@ readCells(FILE *f, LibertyLibrary *lib)
 
     // Timing arc sets (commit 4b).
     readTimingArcSets(f, lib, cell, ports);
+
+    // === Internal power (commit 5) ==================================
+    auto resolve_port_5 = [&](uint32_t idx) -> LibertyPort* {
+      if (idx == 0xFFFFFFFFu || idx >= ports.size()) return nullptr;
+      return ports[idx];
+    };
+    uint32_t ip_count = cache::readU32(f);
+    for (uint32_t i = 0; i < ip_count; ++i) {
+      LibertyPort *port           = resolve_port_5(cache::readU32(f));
+      LibertyPort *related_port   = resolve_port_5(cache::readU32(f));
+      LibertyPort *related_pg_pin = resolve_port_5(cache::readU32(f));
+      FuncExpr *when_raw          = readFuncExpr(f, ports);
+      std::shared_ptr<FuncExpr> when(when_raw);
+      // InternalPowerModels is std::array<InternalPowerModel, 2>.
+      InternalPowerModels models{
+          InternalPowerModel(),
+          InternalPowerModel()};
+      for (auto rf : RiseFall::range()) {
+        TableModel *tm = readTableModel(f, lib);
+        if (tm)
+          models[rf->index()] =
+              InternalPowerModel(std::shared_ptr<TableModel>(tm));
+      }
+      cell->makeInternalPower(port, related_port, related_pg_pin,
+                              when, models);
+    }
+
+    // === Leakage power (commit 5) ===================================
+    uint32_t lp_count = cache::readU32(f);
+    for (uint32_t i = 0; i < lp_count; ++i) {
+      LibertyPort *related_pg_port = resolve_port_5(cache::readU32(f));
+      FuncExpr *when               = readFuncExpr(f, ports);
+      float power                  = cache::readFloat(f);
+      cell->makeLeakagePower(related_pg_port, when, power);
+    }
   }
 }
 

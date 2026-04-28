@@ -442,6 +442,11 @@ public:
                            size_t segment,
                            const RiseFall *rf);
   static bool checkAxes(const TableModel *table);
+  // Vector layout: capacitance_models_[segment * RiseFall::index_count +
+  // rf->index()]. Useful for serialization; consumers normally use the
+  // model via the timing-arc lookup path.
+  const std::vector<TableModel> &capacitanceModels() const
+  { return capacitance_models_; }
 
 private:
   std::vector<TableModel> capacitance_models_;
@@ -496,6 +501,12 @@ public:
                                float cap);
   // V/I for last segment of min slew/max cap.
   float finalResistance();
+
+  // Serialization accessors. Most lookup goes through the interpolated
+  // currentWaveform/voltage* paths above; the binary cache is the only
+  // consumer of the raw vectors.
+  const Table1Seq &currentWaveforms() const { return current_waveforms_; }
+  const Table &referenceTimes() const { return ref_times_; }
 
 private:
   void findVoltages(size_t wave_index,

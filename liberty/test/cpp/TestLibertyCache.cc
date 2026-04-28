@@ -32,6 +32,8 @@
 #include <gtest/gtest.h>
 
 #include "FuncExpr.hh"
+#include "InternalPower.hh"
+#include "LeakagePower.hh"
 #include "Liberty.hh"
 #include "liberty/LibertyBuilder.hh"
 #include "NetworkClass.hh"
@@ -850,6 +852,309 @@ expectCellWithTimingArcRoundTripped(LibertyLibrary *lib)
   const TableModel *fall_slew = fall_gm->slewModels()->model();
   ASSERT_NE(fall_slew, nullptr);
   EXPECT_FLOAT_EQ(fall_slew->table()->value(1u, 0u), 0.09F);
+}
+
+// Build an OutputWaveforms with a 2-by-2 grid of trivial 1D
+// time/current waveforms + a 0D ref_times scalar.
+static OutputWaveforms *
+makeOutputWaveforms(const RiseFall *rf,
+                    std::vector<float> slew_pts,
+                    std::vector<float> cap_pts)
+{
+  FloatSeq sf(slew_pts.begin(), slew_pts.end());
+  FloatSeq cf(cap_pts.begin(),  cap_pts.end());
+  TableAxisPtr slew_axis = std::make_shared<TableAxis>(
+      TableAxisVariable::input_net_transition, std::move(sf));
+  TableAxisPtr cap_axis = std::make_shared<TableAxis>(
+      TableAxisVariable::total_output_net_capacitance, std::move(cf));
+
+  // Each waveform is a 1D time→current table. We synthesize trivial
+  // 3-point waveforms for the test; values matter for round-trip.
+  Table1Seq waveforms;
+  for (size_t s = 0; s < slew_pts.size(); ++s) {
+    for (size_t c = 0; c < cap_pts.size(); ++c) {
+      FloatSeq time_axis_pts{0.0F, 0.5F, 1.0F};
+      TableAxisPtr time_axis = std::make_shared<TableAxis>(
+          TableAxisVariable::time, std::move(time_axis_pts));
+      FloatSeq currents{
+          0.0F + 0.1F * s,
+          1.0F + 0.1F * c,
+          2.0F + 0.1F * (s + c)};
+      waveforms.push_back(new Table(std::move(currents), time_axis));
+    }
+  }
+  Table ref_times{0.42F};
+  return new OutputWaveforms(slew_axis, cap_axis, rf, waveforms,
+                             std::move(ref_times));
+}
+
+static void
+populateCellWithCcsArc(LibertyLibrary *lib)
+{
+  LibertyBuilder builder(/*debug=*/nullptr, /*report=*/nullptr);
+  LibertyCell *cell = builder.makeCell(lib, "BUF_CCS", "buf_ccs.lib");
+  PortDirection *in_dir  = PortDirection::find("input");
+  PortDirection *out_dir = PortDirection::find("output");
+  LibertyPort *a = builder.makePort(cell, "A");
+  LibertyPort *y = builder.makePort(cell, "Y");
+  a->setDirection(in_dir);
+  y->setDirection(out_dir);
+
+  // Library-level DriverWaveform "rising_edge".
+  TablePtr dw_table = make2DTable(TableAxisVariable::input_net_transition,
+                                  {0.01F, 0.05F},
+                                  TableAxisVariable::time,
+                                  {0.0F, 0.5F, 1.0F},
+                                  {{0.0F, 0.5F, 0.9F},
+                                   {0.0F, 0.4F, 0.8F}});
+  lib->makeDriverWaveform("rising_edge", dw_table);
+
+  // Per-port DriverWaveform on a (rise edge).
+  a->setDriverWaveform(lib->findDriverWaveform("rising_edge"),
+                       RiseFall::rise());
+
+  // Per-port ReceiverModel on a: one capacitance model per (segment,
+  // rf). Use segment 0 with rise + fall, and segment 1 with rise.
+  auto rm = std::make_shared<ReceiverModel>();
+  TableTemplate *cap_tt = lib->makeTableTemplate("cap_1d",
+                                                 TableTemplateType::capacitance);
+  FloatSeq cap_axis_pts{0.005F, 0.050F};
+  cap_tt->setAxis1(std::make_shared<TableAxis>(
+      TableAxisVariable::input_net_transition, std::move(cap_axis_pts)));
+  auto make_cap_model = [&](const RiseFall *rf, std::vector<float> values) {
+    FloatSeq fs(values.begin(), values.end());
+    FloatSeq axis_pts{0.005F, 0.050F};
+    TableAxisPtr axis = std::make_shared<TableAxis>(
+        TableAxisVariable::input_net_transition, std::move(axis_pts));
+    TablePtr table = std::make_shared<Table>(std::move(fs), axis);
+    return TableModel(std::move(table), cap_tt, ScaleFactorType::cell, rf);
+  };
+  rm->setCapacitanceModel(make_cap_model(RiseFall::rise(), {0.001F, 0.0015F}),
+                          /*segment=*/0, RiseFall::rise());
+  rm->setCapacitanceModel(make_cap_model(RiseFall::fall(), {0.0011F, 0.0016F}),
+                          /*segment=*/0, RiseFall::fall());
+  rm->setCapacitanceModel(make_cap_model(RiseFall::rise(), {0.002F, 0.003F}),
+                          /*segment=*/1, RiseFall::rise());
+  a->setReceiverModel(rm);
+
+  // Build a combinational arc with a CCS-equipped GateTableModel
+  // (delay/slew tables + per-arc receiver model + output waveforms).
+  TableModel *rise_delay = makeDelayTableModel(lib, RiseFall::rise(),
+      {0.01F, 0.05F}, {0.005F, 0.050F},
+      {{0.10F, 0.20F}, {0.15F, 0.30F}});
+  TableModel *rise_slew  = makeDelayTableModel(lib, RiseFall::rise(),
+      {0.01F, 0.05F}, {0.005F, 0.050F},
+      {{0.05F, 0.10F}, {0.08F, 0.15F}});
+  TableModels *rise_dm = new TableModels(rise_delay);
+  TableModels *rise_sm = new TableModels(rise_slew);
+
+  // Arc-level receiver model (independent from per-port one).
+  auto arc_rm = std::make_shared<ReceiverModel>();
+  arc_rm->setCapacitanceModel(make_cap_model(RiseFall::rise(),
+                                             {0.0009F, 0.0012F}),
+                              /*segment=*/0, RiseFall::rise());
+
+  OutputWaveforms *ow = makeOutputWaveforms(RiseFall::rise(),
+                                            {0.01F, 0.05F},
+                                            {0.005F, 0.050F});
+
+  GateTableModel *rise_model =
+      new GateTableModel(cell, rise_dm, rise_sm, arc_rm, ow);
+
+  TimingArcAttrsPtr attrs = std::make_shared<TimingArcAttrs>();
+  attrs->setTimingType(TimingType::combinational);
+  attrs->setTimingSense(TimingSense::positive_unate);
+  attrs->setModel(RiseFall::rise(), rise_model);
+
+  TimingArcSet *set = cell->makeTimingArcSet(a, y, /*related_out=*/nullptr,
+                                             TimingRole::combinational(),
+                                             attrs);
+  set->addTimingArc(new TimingArc(set, Transition::rise(), Transition::rise(),
+                                  attrs->model(RiseFall::rise())));
+}
+
+static void
+expectCellWithCcsArcRoundTripped(LibertyLibrary *lib)
+{
+  LibertyCell *cell = lib->findLibertyCell("BUF_CCS");
+  ASSERT_NE(cell, nullptr);
+  LibertyPort *a = cell->findLibertyPort("A");
+  ASSERT_NE(a, nullptr);
+
+  // Per-port ReceiverModel.
+  const ReceiverModel *port_rm = a->receiverModel();
+  ASSERT_NE(port_rm, nullptr);
+  // Layout: [seg0_rise, seg0_fall, seg1_rise, seg1_fall]. Index 3
+  // (seg1_fall) was never populated, so its TableModel has no table.
+  const auto &models = port_rm->capacitanceModels();
+  ASSERT_GE(models.size(), 3u);
+  ASSERT_NE(models[0].table().get(), nullptr);
+  ASSERT_NE(models[1].table().get(), nullptr);
+  ASSERT_NE(models[2].table().get(), nullptr);
+  EXPECT_FLOAT_EQ(models[0].table()->value(static_cast<size_t>(0)), 0.001F);
+  EXPECT_FLOAT_EQ(models[1].table()->value(static_cast<size_t>(1)), 0.0016F);
+  EXPECT_FLOAT_EQ(models[2].table()->value(static_cast<size_t>(0)), 0.002F);
+
+  // Per-port DriverWaveform refs.
+  DriverWaveform *dw_rise = a->driverWaveform(RiseFall::rise());
+  ASSERT_NE(dw_rise, nullptr);
+  EXPECT_EQ(dw_rise->name(), "rising_edge");
+  EXPECT_EQ(a->driverWaveform(RiseFall::fall()), nullptr);
+
+  // Per-arc CCS model.
+  ASSERT_EQ(cell->timingArcSets().size(), 1u);
+  const TimingArc *arc = cell->timingArcSets()[0]->arcs()[0];
+  const GateTableModel *gm =
+      static_cast<const GateTableModel*>(arc->model());
+  ASSERT_NE(gm, nullptr);
+  ASSERT_NE(gm->receiverModel(), nullptr);
+  ASSERT_GE(gm->receiverModel()->capacitanceModels().size(), 1u);
+
+  OutputWaveforms *ow = gm->outputWaveforms();
+  ASSERT_NE(ow, nullptr);
+  EXPECT_EQ(ow->rf(), RiseFall::rise());
+  ASSERT_NE(ow->slewAxis(), nullptr);
+  ASSERT_NE(ow->capAxis(),  nullptr);
+  EXPECT_EQ(ow->slewAxis()->values().size(), 2u);
+  EXPECT_EQ(ow->capAxis()->values().size(),  2u);
+  // 2x2 grid → 4 waveforms.
+  EXPECT_EQ(ow->currentWaveforms().size(), 4u);
+  // ref_times was a 0D scalar = 0.42.
+  EXPECT_FLOAT_EQ(ow->referenceTimes().value(0u, 0u, 0u), 0.42F);
+}
+
+// Build a cell with internal/leakage power records (commit 5).
+static void
+populateCellWithPower(LibertyLibrary *lib)
+{
+  LibertyBuilder builder(/*debug=*/nullptr, /*report=*/nullptr);
+  LibertyCell *cell = builder.makeCell(lib, "AND_PWR", "and_pwr.lib");
+  PortDirection *in_dir  = PortDirection::find("input");
+  PortDirection *out_dir = PortDirection::find("output");
+  PortDirection *pg_dir  = PortDirection::find("internal");
+  LibertyPort *a = builder.makePort(cell, "A");
+  LibertyPort *b = builder.makePort(cell, "B");
+  LibertyPort *y = builder.makePort(cell, "Y");
+  LibertyPort *vdd = builder.makePort(cell, "VDD");
+  a->setDirection(in_dir);
+  b->setDirection(in_dir);
+  y->setDirection(out_dir);
+  vdd->setDirection(pg_dir ? pg_dir : in_dir);
+  vdd->setPwrGndType(PwrGndType::primary_power);
+
+  // Build a small power TableModel (just for the test — values are
+  // arbitrary).
+  TableTemplate *tt = lib->makeTableTemplate("pwr_2d", TableTemplateType::power);
+  FloatSeq slew_pts{0.01F, 0.05F};
+  FloatSeq cap_pts {0.005F, 0.050F};
+  tt->setAxis1(std::make_shared<TableAxis>(
+      TableAxisVariable::input_net_transition, std::move(slew_pts)));
+  tt->setAxis2(std::make_shared<TableAxis>(
+      TableAxisVariable::total_output_net_capacitance, std::move(cap_pts)));
+
+  auto make_pwr_model = [&](const RiseFall *rf, std::vector<std::vector<float>> values) {
+    TablePtr table = make2DTable(TableAxisVariable::input_net_transition,
+                                 {0.01F, 0.05F},
+                                 TableAxisVariable::total_output_net_capacitance,
+                                 {0.005F, 0.050F},
+                                 std::move(values));
+    return new TableModel(std::move(table), tt, ScaleFactorType::cell, rf);
+  };
+
+  InternalPowerModels ip_models{
+      InternalPowerModel(std::shared_ptr<TableModel>(
+          make_pwr_model(RiseFall::rise(), {{0.001F, 0.002F},
+                                             {0.0015F, 0.0025F}}))),
+      InternalPowerModel(std::shared_ptr<TableModel>(
+          make_pwr_model(RiseFall::fall(), {{0.0011F, 0.0022F},
+                                             {0.0016F, 0.0026F}})))};
+
+  // Internal power on Y, related to A (from the AND function).
+  cell->makeInternalPower(y, a, vdd, /*when=*/nullptr, ip_models);
+
+  // Leakage power: when = (A AND B), pg port = vdd.
+  cell->makeLeakagePower(vdd,
+                         FuncExpr::makeAnd(FuncExpr::makePort(a),
+                                           FuncExpr::makePort(b)),
+                         /*power=*/0.05F);
+  // And a second leakage entry without a when expression.
+  cell->makeLeakagePower(vdd, /*when=*/nullptr, 0.01F);
+}
+
+static void
+expectCellWithPowerRoundTripped(LibertyLibrary *lib)
+{
+  LibertyCell *cell = lib->findLibertyCell("AND_PWR");
+  ASSERT_NE(cell, nullptr);
+  LibertyPort *a   = cell->findLibertyPort("A");
+  LibertyPort *y   = cell->findLibertyPort("Y");
+  LibertyPort *vdd = cell->findLibertyPort("VDD");
+  ASSERT_NE(a, nullptr);
+  ASSERT_NE(y, nullptr);
+  ASSERT_NE(vdd, nullptr);
+  EXPECT_EQ(vdd->pwrGndType(), PwrGndType::primary_power);
+
+  const InternalPowerSeq &ips = cell->internalPowers();
+  ASSERT_EQ(ips.size(), 1u);
+  const InternalPower &ip = ips[0];
+  EXPECT_EQ(ip.port(),         y);
+  EXPECT_EQ(ip.relatedPort(),  a);
+  EXPECT_EQ(ip.relatedPgPin(), vdd);
+  EXPECT_EQ(ip.when(), nullptr);
+  // Per-RF model survives.
+  ASSERT_NE(ip.model(RiseFall::rise()).model(), nullptr);
+  ASSERT_NE(ip.model(RiseFall::fall()).model(), nullptr);
+  const Table *rise_table = ip.model(RiseFall::rise()).model()->table().get();
+  ASSERT_NE(rise_table, nullptr);
+  EXPECT_EQ(rise_table->order(), 2);
+  EXPECT_FLOAT_EQ(rise_table->value(0u, 0u), 0.001F);
+  EXPECT_FLOAT_EQ(rise_table->value(1u, 1u), 0.0025F);
+
+  const LeakagePowerSeq &lps = cell->leakagePowers();
+  ASSERT_EQ(lps.size(), 2u);
+
+  // First entry: when = (A AND B), power = 0.05.
+  EXPECT_EQ(lps[0].relatedPgPort(), vdd);
+  EXPECT_FLOAT_EQ(lps[0].power(), 0.05F);
+  ASSERT_NE(lps[0].when(), nullptr);
+  EXPECT_EQ(lps[0].when()->op(), FuncExpr::Op::and_);
+
+  // Second entry: no when.
+  EXPECT_EQ(lps[1].relatedPgPort(), vdd);
+  EXPECT_FLOAT_EQ(lps[1].power(), 0.01F);
+  EXPECT_EQ(lps[1].when(), nullptr);
+}
+
+TEST(LibertyCache, InternalAndLeakagePowerRoundTrip)
+{
+  std::unique_ptr<LibertyLibrary> src(new LibertyLibrary("pwr_lib", ""));
+  populateLibraryScalars(src.get());
+  populateCellWithPower(src.get());
+
+  TempCachePath cache_path("/tmp/sta_libcache_pwr.cache");
+  writeLibertyCache(src.get(), cache_path.c_str(), nullptr);
+
+  std::unique_ptr<LibertyLibrary> dst(
+      readLibertyCache(cache_path.c_str(), true, nullptr));
+  ASSERT_NE(dst.get(), nullptr);
+
+  expectCellWithPowerRoundTripped(dst.get());
+}
+
+TEST(LibertyCache, CcsRoundTrip)
+{
+  std::unique_ptr<LibertyLibrary> src(new LibertyLibrary("ccs_lib", ""));
+  populateLibraryScalars(src.get());
+  populateCellWithCcsArc(src.get());
+
+  TempCachePath cache_path("/tmp/sta_libcache_ccs.cache");
+  writeLibertyCache(src.get(), cache_path.c_str(), nullptr);
+
+  std::unique_ptr<LibertyLibrary> dst(
+      readLibertyCache(cache_path.c_str(), true, nullptr));
+  ASSERT_NE(dst.get(), nullptr);
+
+  expectCellWithCcsArcRoundTripped(dst.get());
 }
 
 TEST(LibertyCache, TimingArcSetRoundTrip)

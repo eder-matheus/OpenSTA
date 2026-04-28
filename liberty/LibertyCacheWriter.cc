@@ -31,6 +31,8 @@
 
 #include "Error.hh"
 #include "FuncExpr.hh"
+#include "InternalPower.hh"
+#include "LeakagePower.hh"
 #include "Liberty.hh"
 #include "LibertyCacheFormat.hh"
 #include "MinMaxValues.hh"
@@ -79,6 +81,12 @@ sourceMetadata(const std::string &filename)
                  ftime.time_since_epoch()).count();
   return md;
 }
+
+// Forward declarations for the CCS helpers in the timing-arc block;
+// the per-port writers below reference them too (port-level
+// ReceiverModel / DriverWaveform refs were added in commit 4c).
+void writeTableModel(FILE *f, const TableModel *model);
+void writeReceiverModel(FILE *f, const ReceiverModel *rm);
 
 void
 writeHeader(FILE *f, const LibertyLibrary *lib)
@@ -530,6 +538,18 @@ writeCellPortDetails(FILE *f, const LibertyCell *cell,
 
     writeFuncExpr(f, p->function(), port_idx);
     writeFuncExpr(f, p->tristateEnable(), port_idx);
+
+    // Per-port ReceiverModel (CCS receiver capacitance for this port,
+    // independent of the per-arc receiver model on GateTableModel).
+    writeReceiverModel(f, p->receiverModel());
+
+    // DriverWaveform per RiseFall: stored as the library-level entry's
+    // name; reader rebinds via lib->findDriverWaveform(name). Empty
+    // name means "no DriverWaveform set on this RF slot".
+    for (auto rf : RiseFall::range()) {
+      DriverWaveform *dw = p->driverWaveform(rf);
+      cache::writeString(f, dw ? std::string{dw->name()} : std::string{});
+    }
   }
 }
 
@@ -582,9 +602,52 @@ writeTableModels(FILE *f, const TableModels *models)
   writeTableModel(f, models->skewness());
 }
 
+// === ReceiverModel + OutputWaveforms (commit 4c) =====================
+
+void
+writeReceiverModel(FILE *f, const ReceiverModel *rm)
+{
+  if (rm == nullptr) {
+    cache::writeBool(f, false);
+    return;
+  }
+  cache::writeBool(f, true);
+  // capacitance_models_ is laid out as [segment * 2 + rf_index]. We
+  // serialize the flat vector; the read side recovers segment/rf from
+  // the index.
+  const std::vector<TableModel> &models = rm->capacitanceModels();
+  cache::writeU32(f, static_cast<uint32_t>(models.size()));
+  for (const TableModel &m : models)
+    writeTableModel(f, &m);
+}
+
+void
+writeOutputWaveforms(FILE *f, const OutputWaveforms *ow)
+{
+  if (ow == nullptr) {
+    cache::writeBool(f, false);
+    return;
+  }
+  cache::writeBool(f, true);
+  cache::writeU32(f, static_cast<uint32_t>(ow->rf()->index()));
+  writeTableAxis(f, ow->slewAxis());
+  writeTableAxis(f, ow->capAxis());
+
+  // current_waveforms_ is a vector of 1D Tables (Table*). Length is
+  // typically slewAxis.size * capAxis.size; we serialize the raw
+  // count and each Table independently so reordering or sparse
+  // populations would still round-trip.
+  const Table1Seq &waveforms = ow->currentWaveforms();
+  cache::writeU32(f, static_cast<uint32_t>(waveforms.size()));
+  for (const Table *t : waveforms)
+    writeTable(f, t);
+
+  // ref_times_ is a (slew × cap) grid of reference times.
+  writeTable(f, &ow->referenceTimes());
+}
+
 // Write a TimingModel*. The dispatch to GateTableModel / CheckTableModel
 // is determined by the TimingArcSet's role (set on the read side).
-// Receiver model and OutputWaveforms are deferred to commit 4c.
 void
 writeArcModel(FILE *f, const TimingModel *model, bool is_check)
 {
@@ -601,6 +664,10 @@ writeArcModel(FILE *f, const TimingModel *model, bool is_check)
     const GateTableModel *gm = static_cast<const GateTableModel*>(model);
     writeTableModels(f, gm->delayModels());
     writeTableModels(f, gm->slewModels());
+    // CCS-specific fields. Either may be null on cells without CCS
+    // characterization.
+    writeReceiverModel(f, gm->receiverModel());
+    writeOutputWaveforms(f, gm->outputWaveforms());
   }
 }
 
@@ -842,6 +909,37 @@ writeCells(FILE *f, const LibertyLibrary *lib)
 
     // === Timing arc sets (commit 4b) ================================
     writeTimingArcSets(f, cell, port_idx);
+
+    // === Internal power (commit 5) ==================================
+    auto write_port_ref_5 = [&](const LibertyPort *p) {
+      if (p == nullptr) {
+        cache::writeU32(f, 0xFFFFFFFFu);
+        return;
+      }
+      auto it = port_idx.find(p);
+      cache::writeU32(f, it == port_idx.end() ? 0xFFFFFFFFu : it->second);
+    };
+
+    const InternalPowerSeq &ips = cell->internalPowers();
+    cache::writeU32(f, static_cast<uint32_t>(ips.size()));
+    for (const InternalPower &ip : ips) {
+      write_port_ref_5(ip.port());
+      write_port_ref_5(ip.relatedPort());
+      write_port_ref_5(ip.relatedPgPin());
+      writeFuncExpr(f, ip.when(), port_idx);
+      // Per-RF InternalPowerModel: just the wrapped TableModel.
+      for (auto rf : RiseFall::range())
+        writeTableModel(f, ip.model(rf).model());
+    }
+
+    // === Leakage power (commit 5) ===================================
+    const LeakagePowerSeq &lps = cell->leakagePowers();
+    cache::writeU32(f, static_cast<uint32_t>(lps.size()));
+    for (const LeakagePower &lp : lps) {
+      write_port_ref_5(lp.relatedPgPort());
+      writeFuncExpr(f, lp.when(), port_idx);
+      cache::writeFloat(f, lp.power());
+    }
   }
 }
 
