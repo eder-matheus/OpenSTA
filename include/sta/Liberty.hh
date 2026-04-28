@@ -551,6 +551,8 @@ public:
                      int from,
                      int to);
   BusDcl *findBusDcl(std::string_view name);
+  const BusDclMap &busDclMap() const { return bus_dcls_; }
+  const ModeDefMap &modeDefMap() const { return mode_defs_; }
   // True when TimingArcSetBuilder::makeRegLatchArcs infers register
   // timing arcs.
   bool hasInferedRegTimingArcs() const { return has_infered_reg_timing_arcs_; }

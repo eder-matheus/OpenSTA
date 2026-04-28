@@ -36,9 +36,11 @@
 #include "LibertyCacheFormat.hh"
 #include "FuncExpr.hh"
 #include "LibertyBuilder.hh"
+#include "NetworkClass.hh"
 #include "Network.hh"
 #include "PortDirection.hh"
 #include "RiseFallMinMax.hh"
+#include "Sequential.hh"
 #include "StaConfig.hh"
 #include "TableModel.hh"
 #include "StaState.hh"
@@ -501,6 +503,95 @@ readCells(FILE *f, LibertyLibrary *lib)
     LibertyBuilder builder(/*debug=*/nullptr, /*report=*/nullptr);
     auto ports = readCellPortHeaders(f, cell, builder);
     readCellPortDetails(f, ports);
+
+    // Helpers for the structures that follow (commit 3c).
+    auto resolve_port = [&](uint32_t idx) -> LibertyPort* {
+      if (idx == 0xFFFFFFFFu || idx >= ports.size()) return nullptr;
+      return ports[idx];
+    };
+
+    // Per-cell BusDcl.
+    uint32_t bus_dcl_count = cache::readU32(f);
+    for (uint32_t b = 0; b < bus_dcl_count; ++b) {
+      std::string bd_name = cache::readString(f);
+      int from = static_cast<int>(cache::readI64(f));
+      int to   = static_cast<int>(cache::readI64(f));
+      cell->makeBusDcl(bd_name, from, to);
+    }
+
+    // Per-cell ModeDef. cond expressions can reference cell ports.
+    uint32_t mode_count = cache::readU32(f);
+    for (uint32_t m = 0; m < mode_count; ++m) {
+      std::string mode_name = cache::readString(f);
+      ModeDef *mode = cell->makeModeDef(mode_name);
+      uint32_t value_count = cache::readU32(f);
+      for (uint32_t v = 0; v < value_count; ++v) {
+        std::string value_name = cache::readString(f);
+        std::string sdf_cond = cache::readString(f);
+        FuncExpr *cond = readFuncExpr(f, ports);
+        ModeValueDef *vd = mode->defineValue(value_name);
+        if (vd) {
+          vd->setSdfCond(sdf_cond);
+          if (cond) vd->setCond(cond);
+        }
+      }
+    }
+
+    // Sequentials. makeSequential takes ownership of the FuncExprs
+    // (deletes them after copying via bitSubExpr); call with size=1
+    // since the cache already stores per-bit expressions.
+    uint32_t seq_count = cache::readU32(f);
+    for (uint32_t s = 0; s < seq_count; ++s) {
+      bool is_register = cache::readBool(f);
+      FuncExpr *clk    = readFuncExpr(f, ports);
+      FuncExpr *data   = readFuncExpr(f, ports);
+      FuncExpr *clear  = readFuncExpr(f, ports);
+      FuncExpr *preset = readFuncExpr(f, ports);
+      LogicValue cpo  = static_cast<LogicValue>(cache::readU32(f));
+      LogicValue cpoi = static_cast<LogicValue>(cache::readU32(f));
+      LibertyPort *out     = resolve_port(cache::readU32(f));
+      LibertyPort *out_inv = resolve_port(cache::readU32(f));
+      cell->makeSequential(/*size=*/1, is_register,
+                           clk, data, clear, preset,
+                           cpo, cpoi, out, out_inv);
+    }
+
+    // Statetable (optional).
+    bool has_statetable = cache::readBool(f);
+    if (has_statetable) {
+      uint32_t in_n = cache::readU32(f);
+      LibertyPortSeq in_ports;
+      in_ports.reserve(in_n);
+      for (uint32_t i = 0; i < in_n; ++i)
+        in_ports.push_back(resolve_port(cache::readU32(f)));
+      uint32_t int_n = cache::readU32(f);
+      LibertyPortSeq int_ports;
+      int_ports.reserve(int_n);
+      for (uint32_t i = 0; i < int_n; ++i)
+        int_ports.push_back(resolve_port(cache::readU32(f)));
+      uint32_t row_n = cache::readU32(f);
+      StatetableRows rows;
+      rows.reserve(row_n);
+      for (uint32_t r = 0; r < row_n; ++r) {
+        StateInputValues iv;
+        uint32_t iv_n = cache::readU32(f);
+        iv.reserve(iv_n);
+        for (uint32_t i = 0; i < iv_n; ++i)
+          iv.push_back(static_cast<StateInputValue>(cache::readU32(f)));
+        StateInternalValues cv;
+        uint32_t cv_n = cache::readU32(f);
+        cv.reserve(cv_n);
+        for (uint32_t i = 0; i < cv_n; ++i)
+          cv.push_back(static_cast<StateInternalValue>(cache::readU32(f)));
+        StateInternalValues nv;
+        uint32_t nv_n = cache::readU32(f);
+        nv.reserve(nv_n);
+        for (uint32_t i = 0; i < nv_n; ++i)
+          nv.push_back(static_cast<StateInternalValue>(cache::readU32(f)));
+        rows.emplace_back(iv, cv, nv);
+      }
+      cell->makeStatetable(in_ports, int_ports, rows);
+    }
   }
 }
 

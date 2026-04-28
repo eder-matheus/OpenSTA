@@ -34,7 +34,9 @@
 #include "FuncExpr.hh"
 #include "Liberty.hh"
 #include "liberty/LibertyBuilder.hh"
+#include "NetworkClass.hh"
 #include "PortDirection.hh"
+#include "Sequential.hh"
 #include "TableModel.hh"
 #include "Transition.hh"
 
@@ -515,6 +517,118 @@ expectCellWithPortsRoundTripped(LibertyLibrary *lib)
   ASSERT_NE(tri, nullptr);
   EXPECT_EQ(tri->op(), FuncExpr::Op::port);
   EXPECT_EQ(tri->port(), a);
+}
+
+// Exercise the structural pieces added in commit 3c: per-cell
+// BusDcl, ModeDef (with cond + sdf_cond), and Sequential.
+static void
+populateSequentialCell(LibertyLibrary *lib)
+{
+  LibertyBuilder builder(/*debug=*/nullptr, /*report=*/nullptr);
+  LibertyCell *cell = builder.makeCell(lib, "DFF", "dff.lib");
+
+  PortDirection *in_dir = PortDirection::find("input");
+  PortDirection *out_dir = PortDirection::find("output");
+  LibertyPort *d   = builder.makePort(cell, "D");
+  LibertyPort *clk = builder.makePort(cell, "CLK");
+  LibertyPort *clr = builder.makePort(cell, "CLR");
+  LibertyPort *q   = builder.makePort(cell, "Q");
+  d->setDirection(in_dir);
+  clk->setDirection(in_dir);
+  clr->setDirection(in_dir);
+  q->setDirection(out_dir);
+
+  // Per-cell bus_dcl.
+  cell->makeBusDcl("LOCAL_BUS", 0, 3);
+
+  // Per-cell mode_def: one mode "M" with one value "vA"
+  // (cond = D, sdf_cond = "1").
+  ModeDef *mode = cell->makeModeDef("M");
+  ModeValueDef *va = mode->defineValue("vA");
+  ASSERT_NE(va, nullptr);
+  va->setSdfCond("D == 1'b1");
+  va->setCond(FuncExpr::makePort(d));
+
+  // Sequential: register, clocked on CLK, data = D, clear = CLR,
+  // output = Q.
+  cell->makeSequential(/*size=*/1,
+                       /*is_register=*/true,
+                       FuncExpr::makePort(clk),
+                       FuncExpr::makePort(d),
+                       FuncExpr::makePort(clr),
+                       /*preset=*/nullptr,
+                       LogicValue::zero,
+                       LogicValue::one,
+                       q,
+                       /*output_inv=*/nullptr);
+}
+
+static void
+expectSequentialCellRoundTripped(LibertyLibrary *lib)
+{
+  LibertyCell *cell = lib->findLibertyCell("DFF");
+  ASSERT_NE(cell, nullptr);
+
+  // Per-cell bus_dcl.
+  BusDcl *bd = cell->findBusDcl("LOCAL_BUS");
+  ASSERT_NE(bd, nullptr);
+  EXPECT_EQ(bd->from(), 0);
+  EXPECT_EQ(bd->to(),   3);
+
+  // Mode definition + value.
+  const ModeDef *mode = cell->findModeDef("M");
+  ASSERT_NE(mode, nullptr);
+  const ModeValueDef *va = mode->findValueDef("vA");
+  ASSERT_NE(va, nullptr);
+  EXPECT_EQ(va->sdfCond(), "D == 1'b1");
+  ASSERT_NE(va->cond(), nullptr);
+  EXPECT_EQ(va->cond()->op(), FuncExpr::Op::port);
+  // Cond port should be the D port from the round-tripped cell.
+  LibertyPort *d_round = cell->findLibertyPort("D");
+  EXPECT_EQ(va->cond()->port(), d_round);
+
+  // Sequential.
+  ASSERT_TRUE(cell->hasSequentials());
+  const SequentialSeq &seqs = cell->sequentials();
+  ASSERT_EQ(seqs.size(), 1u);
+  const Sequential &s = seqs[0];
+  EXPECT_TRUE(s.isRegister());
+
+  LibertyPort *clk_round = cell->findLibertyPort("CLK");
+  LibertyPort *clr_round = cell->findLibertyPort("CLR");
+  LibertyPort *q_round   = cell->findLibertyPort("Q");
+
+  ASSERT_NE(s.clock(), nullptr);
+  EXPECT_EQ(s.clock()->op(), FuncExpr::Op::port);
+  EXPECT_EQ(s.clock()->port(), clk_round);
+
+  ASSERT_NE(s.data(), nullptr);
+  EXPECT_EQ(s.data()->port(), d_round);
+
+  ASSERT_NE(s.clear(), nullptr);
+  EXPECT_EQ(s.clear()->port(), clr_round);
+
+  EXPECT_EQ(s.preset(), nullptr);
+  EXPECT_EQ(s.clearPresetOutput(),    LogicValue::zero);
+  EXPECT_EQ(s.clearPresetOutputInv(), LogicValue::one);
+  EXPECT_EQ(s.output(),    q_round);
+  EXPECT_EQ(s.outputInv(), nullptr);
+}
+
+TEST(LibertyCache, SequentialAndModeDefRoundTrip)
+{
+  std::unique_ptr<LibertyLibrary> src(new LibertyLibrary("seq_lib", ""));
+  populateLibraryScalars(src.get());
+  populateSequentialCell(src.get());
+
+  TempCachePath cache_path("/tmp/sta_libcache_seq.cache");
+  writeLibertyCache(src.get(), cache_path.c_str(), nullptr);
+
+  std::unique_ptr<LibertyLibrary> dst(
+      readLibertyCache(cache_path.c_str(), true, nullptr));
+  ASSERT_NE(dst.get(), nullptr);
+
+  expectSequentialCellRoundTripped(dst.get());
 }
 
 TEST(LibertyCache, CellPortsAndFuncExprRoundTrip)

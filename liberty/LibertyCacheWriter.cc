@@ -34,8 +34,10 @@
 #include "Liberty.hh"
 #include "LibertyCacheFormat.hh"
 #include "MinMaxValues.hh"
+#include "NetworkClass.hh"
 #include "PortDirection.hh"
 #include "RiseFallMinMax.hh"
+#include "Sequential.hh"
 #include "StaConfig.hh"
 #include "TableModel.hh"
 #include "Transition.hh"
@@ -535,6 +537,86 @@ writeCells(FILE *f, const LibertyLibrary *lib)
     // can resolve to within-cell indices.
     PortIndexMap port_idx = writeCellPortHeaders(f, cell);
     writeCellPortDetails(f, cell, port_idx);
+
+    // === Per-cell BusDcl ============================================
+    const BusDclMap &cell_bus_dcls = cell->busDclMap();
+    cache::writeU32(f, static_cast<uint32_t>(cell_bus_dcls.size()));
+    for (const auto &[name, bd] : cell_bus_dcls) {
+      cache::writeString(f, name);
+      cache::writeI64(f, bd.from());
+      cache::writeI64(f, bd.to());
+    }
+
+    // === Per-cell ModeDef ============================================
+    // Each ModeDef holds a value map; each ModeValueDef has a
+    // (string sdf_cond, FuncExpr cond). cond may reference cell ports.
+    const ModeDefMap &cell_modes = cell->modeDefMap();
+    cache::writeU32(f, static_cast<uint32_t>(cell_modes.size()));
+    for (const auto &[mode_name, mode] : cell_modes) {
+      cache::writeString(f, mode_name);
+      const ModeValueMap &values = mode.values();
+      cache::writeU32(f, static_cast<uint32_t>(values.size()));
+      for (const auto &[value_name, value_def] : values) {
+        cache::writeString(f, value_name);
+        cache::writeString(f, value_def.sdfCond());
+        writeFuncExpr(f, value_def.cond(), port_idx);
+      }
+    }
+
+    // === Sequentials =================================================
+    // Each Sequential has up to 4 FuncExprs (clock/data/clear/preset),
+    // 2 LogicValue enums, and 2 LibertyPort refs (output, output_inv).
+    const SequentialSeq &seqs = cell->sequentials();
+    cache::writeU32(f, static_cast<uint32_t>(seqs.size()));
+    auto write_port_ref = [&](const LibertyPort *p) {
+      if (p == nullptr) {
+        cache::writeU32(f, 0xFFFFFFFFu);
+        return;
+      }
+      auto it = port_idx.find(p);
+      cache::writeU32(f, it == port_idx.end() ? 0xFFFFFFFFu : it->second);
+    };
+    for (const Sequential &s : seqs) {
+      cache::writeBool(f, s.isRegister());
+      writeFuncExpr(f, s.clock(),  port_idx);
+      writeFuncExpr(f, s.data(),   port_idx);
+      writeFuncExpr(f, s.clear(),  port_idx);
+      writeFuncExpr(f, s.preset(), port_idx);
+      cache::writeU32(f, static_cast<uint32_t>(s.clearPresetOutput()));
+      cache::writeU32(f, static_cast<uint32_t>(s.clearPresetOutputInv()));
+      write_port_ref(s.output());
+      write_port_ref(s.outputInv());
+    }
+
+    // === Statetable ==================================================
+    const Statetable *st = cell->statetable();
+    cache::writeBool(f, st != nullptr);
+    if (st) {
+      const LibertyPortSeq &in_ports = st->inputPorts();
+      cache::writeU32(f, static_cast<uint32_t>(in_ports.size()));
+      for (const LibertyPort *p : in_ports)
+        write_port_ref(p);
+      const LibertyPortSeq &int_ports = st->internalPorts();
+      cache::writeU32(f, static_cast<uint32_t>(int_ports.size()));
+      for (const LibertyPort *p : int_ports)
+        write_port_ref(p);
+      const StatetableRows &rows = st->table();
+      cache::writeU32(f, static_cast<uint32_t>(rows.size()));
+      for (const StatetableRow &row : rows) {
+        const auto &iv = row.inputValues();
+        cache::writeU32(f, static_cast<uint32_t>(iv.size()));
+        for (StateInputValue v : iv)
+          cache::writeU32(f, static_cast<uint32_t>(v));
+        const auto &cv = row.currentValues();
+        cache::writeU32(f, static_cast<uint32_t>(cv.size()));
+        for (StateInternalValue v : cv)
+          cache::writeU32(f, static_cast<uint32_t>(v));
+        const auto &nv = row.nextValues();
+        cache::writeU32(f, static_cast<uint32_t>(nv.size()));
+        for (StateInternalValue v : nv)
+          cache::writeU32(f, static_cast<uint32_t>(v));
+      }
+    }
   }
 }
 
