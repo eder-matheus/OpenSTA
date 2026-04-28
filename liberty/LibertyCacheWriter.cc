@@ -613,12 +613,19 @@ writeReceiverModel(FILE *f, const ReceiverModel *rm)
   }
   cache::writeBool(f, true);
   // capacitance_models_ is laid out as [segment * 2 + rf_index]. We
-  // serialize the flat vector; the read side recovers segment/rf from
-  // the index.
+  // serialize the flat vector; the reader recovers segment/rf from
+  // the index. Empty (default-constructed) slots are emitted as
+  // present=false so the reader doesn't treat them as real entries
+  // and re-bind them to a wrong (segment, rf) on the read side.
   const std::vector<TableModel> &models = rm->capacitanceModels();
   cache::writeU32(f, static_cast<uint32_t>(models.size()));
-  for (const TableModel &m : models)
+  for (const TableModel &m : models) {
+    if (m.table().get() == nullptr) {
+      cache::writeBool(f, false);  // empty slot
+      continue;
+    }
     writeTableModel(f, &m);
+  }
 }
 
 void

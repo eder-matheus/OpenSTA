@@ -57,9 +57,10 @@ using cache::SectionId;
 
 namespace {
 
-// Forward declarations for the CCS helpers in the timing-arc block;
-// readCellPortCcs (introduced in commit 4c) needs them earlier in the
-// file than where the timing-arc helpers live.
+// Forward declaration: readCellPortDetails (commit 3b) calls
+// readReceiverModel for the per-port CCS receiver block (commit 4c),
+// but readReceiverModel lives in the timing-arc helper block further
+// down the file.
 ReceiverModelPtr readReceiverModel(FILE *f, LibertyLibrary *lib);
 
 void
@@ -425,7 +426,8 @@ readCellPortHeaders(FILE *f, LibertyCell *cell, LibertyBuilder &builder)
 }
 
 void
-readCellPortDetails(FILE *f, const std::vector<LibertyPort*> &ports)
+readCellPortDetails(FILE *f, LibertyLibrary *lib,
+                    const std::vector<LibertyPort*> &ports)
 {
   for (LibertyPort *p : ports) {
     p->setPwrGndType(static_cast<PwrGndType>(cache::readU32(f)));
@@ -507,17 +509,11 @@ readCellPortDetails(FILE *f, const std::vector<LibertyPort*> &ports)
     if (func) p->setFunction(func);
     FuncExpr *tri = readFuncExpr(f, ports);
     if (tri) p->setTristateEnable(tri);
-  }
-}
 
-// Per-port ReceiverModel + DriverWaveform refs (commit 4c). Called as
-// a follow-up to readCellPortDetails; the LibertyLibrary is needed
-// for DriverWaveform name lookup.
-void
-readCellPortCcs(FILE *f, LibertyLibrary *lib,
-                const std::vector<LibertyPort*> &ports)
-{
-  for (LibertyPort *p : ports) {
+    // Per-port ReceiverModel + DriverWaveform refs (commit 4c). The
+    // writer interleaves these inside the per-port loop, so the
+    // reader has to do the same -- otherwise the file position drifts
+    // by (sizeof receiver_model + 2 strings) per port.
     ReceiverModelPtr rm = readReceiverModel(f, lib);
     if (rm) p->setReceiverModel(std::move(rm));
     for (auto rf : RiseFall::range()) {
@@ -587,27 +583,29 @@ readReceiverModel(FILE *f, LibertyLibrary *lib)
   auto rm = std::make_shared<ReceiverModel>();
   for (uint32_t i = 0; i < n; ++i) {
     bool tm_present = cache::readBool(f);
-    if (!tm_present) {
-      // The slot was a default-constructed (empty) TableModel on the
-      // write side. Skip; setCapacitanceModel only runs for valid
-      // entries below.
-      continue;
-    }
+    if (!tm_present)
+      continue;  // empty slot in the source vector
     // Read a TableModel inline.
     std::string template_name = cache::readString(f);
     TableTemplateType template_type =
         static_cast<TableTemplateType>(cache::readU32(f));
     ScaleFactorType sft = static_cast<ScaleFactorType>(cache::readU32(f));
-    uint32_t rf_index = cache::readU32(f);
+    cache::readU32(f);  // rf_index — discarded; we use position below
     TablePtr table = readTablePtr(f);
     TableTemplate *tt = template_name.empty()
         ? nullptr
         : lib->findTableTemplate(template_name, template_type);
-    const RiseFall *rf = (rf_index == RiseFall::riseIndex())
+    // Derive (segment, rf) from the slot position so the reader
+    // re-creates the source layout exactly. Using the deserialized
+    // rf_index here would mis-place models for slots whose source-side
+    // value is opaque to the writer (default-constructed empties have
+    // rf_index=0 regardless of slot).
+    size_t segment = i / RiseFall::index_count;
+    const RiseFall *pos_rf = (i % RiseFall::index_count
+                                == RiseFall::riseIndex())
         ? RiseFall::rise() : RiseFall::fall();
-    TableModel tm(std::move(table), tt, sft, rf);
-    rm->setCapacitanceModel(std::move(tm),
-                            /*segment=*/i / RiseFall::index_count, rf);
+    TableModel tm(std::move(table), tt, sft, pos_rf);
+    rm->setCapacitanceModel(std::move(tm), segment, pos_rf);
   }
   return rm;
 }
@@ -705,7 +703,10 @@ readTimingArcSets(FILE *f, LibertyLibrary *lib, LibertyCell *cell,
                                                role, attrs);
     set->setIsCondDefault(is_cond_default);
 
-    // Arcs.
+    // Arcs. NB: TimingArc's ctor calls set->addTimingArc(this), so
+    // constructing the arc is sufficient -- a second addTimingArc()
+    // call here would double-register the pointer and trigger a
+    // double-free when the arc set is later destructed.
     uint32_t arc_count = cache::readU32(f);
     for (uint32_t a = 0; a < arc_count; ++a) {
       std::string from_rf_name = cache::readString(f);
@@ -716,8 +717,7 @@ readTimingArcSets(FILE *f, LibertyLibrary *lib, LibertyCell *cell,
       TimingModel *model = nullptr;
       if (from_t && from_t->asRiseFall())
         model = attrs->model(from_t->asRiseFall());
-      TimingArc *arc = new TimingArc(set, from_t, to_t, model);
-      set->addTimingArc(arc);
+      new TimingArc(set, from_t, to_t, model);
     }
   }
 }
@@ -805,8 +805,7 @@ readCells(FILE *f, LibertyLibrary *lib)
     // cell, so all ports must exist before any FuncExpr is read).
     LibertyBuilder builder(/*debug=*/nullptr, /*report=*/nullptr);
     auto ports = readCellPortHeaders(f, cell, builder);
-    readCellPortDetails(f, ports);
-    readCellPortCcs(f, lib, ports);
+    readCellPortDetails(f, lib, ports);
 
     // Helpers for the structures that follow (commit 3c).
     auto resolve_port = [&](uint32_t idx) -> LibertyPort* {
@@ -833,11 +832,12 @@ readCells(FILE *f, LibertyLibrary *lib)
         std::string value_name = cache::readString(f);
         std::string sdf_cond = cache::readString(f);
         FuncExpr *cond = readFuncExpr(f, ports);
+        // ModeDef::defineValue uses try_emplace and always returns a
+        // valid pointer (existing entries return the existing slot).
         ModeValueDef *vd = mode->defineValue(value_name);
-        if (vd) {
-          vd->setSdfCond(sdf_cond);
-          if (cond) vd->setCond(cond);
-        }
+        vd->setSdfCond(sdf_cond);
+        if (cond)
+          vd->setCond(cond);
       }
     }
 
