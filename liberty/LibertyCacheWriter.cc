@@ -46,6 +46,7 @@
 #include "TimingModel.hh"
 #include "TimingRole.hh"
 #include "Transition.hh"
+#include "Units.hh"
 
 namespace sta {
 
@@ -179,6 +180,32 @@ writeLibraryScalars(FILE *f, const LibertyLibrary *lib)
   lib->defaultMaxSlew(fval, exists);
   cache::writeFloat(f, fval);
   cache::writeBool(f, exists);
+}
+
+// Liberty's `time_unit`, `capacitive_load_unit`, etc. are user-facing
+// scale + suffix metadata — STA stores values internally in SI base
+// units, so the unit struct only affects formatting (write_liberty,
+// report tables). Without this section, a cache-loaded library renders
+// every quantity in SI: `1ns` becomes `1s`, `1pF` becomes `1F`, and
+// every value formatted with N digits truncates to zero.
+void
+writeUnits(FILE *f, const LibertyLibrary *lib)
+{
+  cache::writeSectionId(f, SectionId::Units);
+  const Units *units = lib->units();
+  auto write_unit = [&](const Unit *u) {
+    cache::writeFloat(f, u->scale());
+    cache::writeString(f, u->suffix());
+    cache::writeU32(f, static_cast<uint32_t>(u->digits()));
+  };
+  write_unit(units->timeUnit());
+  write_unit(units->resistanceUnit());
+  write_unit(units->capacitanceUnit());
+  write_unit(units->voltageUnit());
+  write_unit(units->currentUnit());
+  write_unit(units->powerUnit());
+  write_unit(units->distanceUnit());
+  write_unit(units->scalarUnit());
 }
 
 void
@@ -425,41 +452,100 @@ collectPortFlags(const LibertyPort *p)
   return flags;
 }
 
-// Pass 1: write each port's identity (just enough so the reader can
-// construct the LibertyPorts in the same order). Returns the within-
-// cell index map that pass 2 uses for FuncExpr port references.
-PortIndexMap
+// Per-port structural kind. Stored as a u8-in-u32 so the format can
+// add new kinds (e.g., for arrayed bundles) without bumping version.
+enum PortKind : uint32_t {
+  kPortScalar       = 0,  // standalone or bundle-member scalar
+  kPortBusParent    = 1,  // bus envelope; followed by N BUS_BIT entries
+  kPortBusBit       = 2,  // a bit member of the most recently emitted bus parent
+  kPortBundleParent = 3,  // bundle envelope; references already-listed members by flat index
+};
+
+// Build the canonical flat port list together with a parallel kinds
+// vector. Walk the cell's top-level port iter: scalar ports map 1:1;
+// bus parents are emitted with their bit members inlined immediately
+// after; bundle parents come last in `cell->ports_` order (their
+// members were already emitted earlier as scalars). FuncExpr /
+// related-port indices use this exact ordering.
+struct PortEntry { const LibertyPort *port; PortKind kind; };
+
+std::vector<PortEntry>
+collectPorts(const LibertyCell *cell)
+{
+  std::vector<PortEntry> ports;
+  LibertyCellPortIterator iter(cell);
+  while (iter.hasNext()) {
+    const LibertyPort *p = iter.next();
+    PortKind k = kPortScalar;
+    if (p->isBus())         k = kPortBusParent;
+    else if (p->isBundle()) k = kPortBundleParent;
+    ports.push_back({p, k});
+    if (k == kPortBusParent) {
+      LibertyPortMemberIterator m(p);
+      while (m.hasNext())
+        ports.push_back({m.next(), kPortBusBit});
+    }
+  }
+  return ports;
+}
+
+// Pass 1: write each port's identity + structural shape (just enough
+// so the reader can construct the LibertyPorts in the same order, and
+// rebuild bus parent / bit member relationships and bundle wrapping).
+// Returns the within-cell index map that pass 2 uses for FuncExpr
+// port references.
+std::pair<PortIndexMap, std::vector<PortEntry>>
 writeCellPortHeaders(FILE *f, const LibertyCell *cell)
 {
   PortIndexMap idx_map;
-  std::vector<const LibertyPort*> ports;
-  // Use the bit-iterator so bus members are visited as individual
-  // ports — bus/bundle support lands in 3c, but iterating bits keeps
-  // the index assignment consistent with what the reader recreates.
-  LibertyCellPortBitIterator iter(cell);
-  while (iter.hasNext())
-    ports.push_back(iter.next());
+  std::vector<PortEntry> ports = collectPorts(cell);
+  for (uint32_t i = 0; i < ports.size(); ++i)
+    idx_map[ports[i].port] = i;
+
   cache::writeU32(f, static_cast<uint32_t>(ports.size()));
-  for (uint32_t i = 0; i < ports.size(); ++i) {
-    cache::writeString(f, ports[i]->name());
-    cache::writeString(f, ports[i]->direction()
-                          ? std::string{ports[i]->direction()->name()}
+  for (const PortEntry &e : ports) {
+    const LibertyPort *p = e.port;
+    cache::writeU32(f, static_cast<uint32_t>(e.kind));
+    cache::writeString(f, p->name());
+    cache::writeString(f, p->direction()
+                          ? std::string{p->direction()->name()}
                           : std::string{});
-    idx_map[ports[i]] = i;
+
+    if (e.kind == kPortBusParent) {
+      cache::writeI64(f, p->fromIndex());
+      cache::writeI64(f, p->toIndex());
+      // BusDcl name (looked up on the read side via cell->findBusDcl
+      // -- which checks the cell's per-cell map first, then falls
+      // through to the library map). Empty name means "no bus_dcl".
+      const BusDcl *bd = p->busDcl();
+      cache::writeString(f, bd ? bd->name() : std::string{});
+    }
+    else if (e.kind == kPortBundleParent) {
+      // Members were already emitted as scalar entries earlier in
+      // this loop (cell->ports_ order). Store their flat-list indices
+      // so the reader can rebuild the ConcretePortSeq for makeBundlePort.
+      LibertyPortMemberIterator m(p);
+      std::vector<uint32_t> member_indices;
+      while (m.hasNext()) {
+        const LibertyPort *mp = m.next();
+        auto it = idx_map.find(mp);
+        member_indices.push_back(it == idx_map.end() ? 0xFFFFFFFFu : it->second);
+      }
+      cache::writeU32(f, static_cast<uint32_t>(member_indices.size()));
+      for (uint32_t mi : member_indices)
+        cache::writeU32(f, mi);
+    }
   }
-  return idx_map;
+  return {std::move(idx_map), std::move(ports)};
 }
 
 void
-writeCellPortDetails(FILE *f, const LibertyCell *cell,
+writeCellPortDetails(FILE *f,
+                     const std::vector<PortEntry> &ports,
                      const PortIndexMap &port_idx)
 {
-  std::vector<const LibertyPort*> ports;
-  LibertyCellPortBitIterator iter(cell);
-  while (iter.hasNext())
-    ports.push_back(iter.next());
-
-  for (const LibertyPort *p : ports) {
+  for (const PortEntry &e : ports) {
+    const LibertyPort *p = e.port;
     cache::writeU32(f, static_cast<uint32_t>(p->pwrGndType()));
     cache::writeString(f, p->voltageName());
     cache::writeU32(f, static_cast<uint32_t>(p->scanSignalType()));
@@ -716,15 +802,25 @@ writeTimingArcSets(FILE *f, const LibertyCell *cell, const PortIndexMap &port_id
     for (auto rf : RiseFall::range())
       writeArcModel(f, set->model(rf), is_check);
 
-    // Arcs. Each arc records its from/to Transition; the model is
-    // implicitly the attrs slot for the arc's from-edge. For special
-    // 3-state transitions (Z/X) the asRiseFall() is null; we still
-    // serialize the Transition by name so the reader can recover.
+    // Arcs. Each arc records its from/to Transition plus the rf-slot
+    // (0=rise, 1=fall, 0xFF=none) of the attrs-level model that the
+    // arc's TimingModel pointer aliases. The slot can't be inferred
+    // from from_t alone -- LibertyBuilder keys arcs by the *output*
+    // (to) edge for negative-unate combinational arcs and by trZ1/trZ0
+    // for tristate -- so we serialize it explicitly to round-trip the
+    // exact rf assignment LibertyBuilder produced.
     const TimingArcSeq &arcs = set->arcs();
     cache::writeU32(f, static_cast<uint32_t>(arcs.size()));
+    const TimingModel *m_rise = set->model(RiseFall::rise());
+    const TimingModel *m_fall = set->model(RiseFall::fall());
     for (const TimingArc *arc : arcs) {
       cache::writeString(f, std::string{arc->fromEdge()->to_string()});
       cache::writeString(f, std::string{arc->toEdge()->to_string()});
+      const TimingModel *am = arc->model();
+      uint32_t slot = 0xFFu;
+      if      (am != nullptr && am == m_rise) slot = 0;
+      else if (am != nullptr && am == m_fall) slot = 1;
+      cache::writeU32(f, slot);
     }
   }
 }
@@ -831,8 +927,8 @@ writeCells(FILE *f, const LibertyLibrary *lib)
 
     // Two-pass: port headers first so FuncExpr port refs in pass 2
     // can resolve to within-cell indices.
-    PortIndexMap port_idx = writeCellPortHeaders(f, cell);
-    writeCellPortDetails(f, cell, port_idx);
+    auto [port_idx, port_entries] = writeCellPortHeaders(f, cell);
+    writeCellPortDetails(f, port_entries, port_idx);
 
     // === Per-cell BusDcl ============================================
     const BusDclMap &cell_bus_dcls = cell->busDclMap();
@@ -965,6 +1061,7 @@ writeLibertyCache(LibertyLibrary *lib,
   writeHeader(f, lib);
   writeLibraryHeader(f, lib);
   writeLibraryScalars(f, lib);
+  writeUnits(f, lib);
   writeBusDcls(f, lib);
   writeOperatingConditions(f, lib);
   writeScaleFactors(f, lib);

@@ -50,6 +50,7 @@
 #include "TimingRole.hh"
 #include "StaState.hh"
 #include "Transition.hh"
+#include "Units.hh"
 
 namespace sta {
 
@@ -204,6 +205,31 @@ readLibraryScalars(FILE *f, LibertyLibrary *lib)
     bool exists = cache::readBool(f);
     if (exists) lib->setDefaultMaxSlew(value);
   }
+}
+
+void
+readUnits(FILE *f, LibertyLibrary *lib)
+{
+  cache::expectSectionId(f, SectionId::Units);
+  Units *units = lib->units();
+  auto read_unit = [&](Unit *u) {
+    float scale = cache::readFloat(f);
+    std::string suffix = cache::readString(f);
+    uint32_t digits = cache::readU32(f);
+    // setScale and setSuffix internally recompute scale_abbrev_suffix_,
+    // so the order of these calls doesn't matter for the final state.
+    u->setScale(scale);
+    u->setSuffix(suffix.c_str());
+    u->setDigits(static_cast<int>(digits));
+  };
+  read_unit(units->timeUnit());
+  read_unit(units->resistanceUnit());
+  read_unit(units->capacitanceUnit());
+  read_unit(units->voltageUnit());
+  read_unit(units->currentUnit());
+  read_unit(units->powerUnit());
+  read_unit(units->distanceUnit());
+  read_unit(units->scalarUnit());
 }
 
 void
@@ -403,20 +429,71 @@ readRfPtr(FILE *f)
   return nullptr;
 }
 
+// Per-port structural kind (mirror of the writer's PortKind enum).
+enum PortKind : uint32_t {
+  kPortScalar       = 0,
+  kPortBusParent    = 1,
+  kPortBusBit       = 2,
+  kPortBundleParent = 3,
+};
+
 // Pass 1: re-create the cell's ports in the same order the writer
-// emitted them. Returns the per-cell port vector that pass 2 uses for
-// FuncExpr port-reference resolution.
+// emitted them, including bus parent / bit-member structure and
+// bundle wrapping. Returns the per-cell flat port vector that pass 2
+// uses for FuncExpr port-reference resolution.
 std::vector<LibertyPort*>
-readCellPortHeaders(FILE *f, LibertyCell *cell, LibertyBuilder &builder)
+readCellPortHeaders(FILE *f, LibertyLibrary *lib, LibertyCell *cell,
+                    LibertyBuilder &builder)
 {
   uint32_t n = cache::readU32(f);
   std::vector<LibertyPort*> ports;
   ports.reserve(n);
   for (uint32_t i = 0; i < n; ++i) {
+    PortKind kind = static_cast<PortKind>(cache::readU32(f));
     std::string name = cache::readString(f);
     std::string dir_name = cache::readString(f);
-    LibertyPort *port = builder.makePort(cell, name);
-    if (!dir_name.empty()) {
+
+    LibertyPort *port = nullptr;
+    switch (kind) {
+    case kPortScalar:
+      port = builder.makePort(cell, name);
+      break;
+    case kPortBusParent: {
+      int from_index = static_cast<int>(cache::readI64(f));
+      int to_index   = static_cast<int>(cache::readI64(f));
+      std::string bus_dcl_name = cache::readString(f);
+      // findBusDcl checks the per-cell map first, then the library
+      // map (already populated by readBusDcls). Empty name => no decl.
+      BusDcl *bus_dcl = bus_dcl_name.empty()
+          ? nullptr
+          : cell->findBusDcl(bus_dcl_name);
+      if (bus_dcl == nullptr && !bus_dcl_name.empty())
+        bus_dcl = lib->findBusDcl(bus_dcl_name);
+      // makeBusPort auto-creates the bit member ports; we'll attach
+      // their per-bit details when the corresponding kPortBusBit
+      // entries are read below.
+      port = builder.makeBusPort(cell, name, from_index, to_index, bus_dcl);
+      break;
+    }
+    case kPortBusBit:
+      // The most recent kPortBusParent already created this bit via
+      // makeBusPort -> makeBusPortBits. Look it up by name.
+      port = cell->findLibertyPort(name);
+      break;
+    case kPortBundleParent: {
+      uint32_t mc = cache::readU32(f);
+      ConcretePortSeq *members = new ConcretePortSeq;
+      members->reserve(mc);
+      for (uint32_t mi = 0; mi < mc; ++mi) {
+        uint32_t midx = cache::readU32(f);
+        members->push_back((midx < ports.size()) ? ports[midx] : nullptr);
+      }
+      port = builder.makeBundlePort(cell, name, members);
+      break;
+    }
+    }
+
+    if (port && !dir_name.empty()) {
       PortDirection *dir = PortDirection::find(dir_name.c_str());
       if (dir) port->setDirection(dir);
     }
@@ -713,10 +790,13 @@ readTimingArcSets(FILE *f, LibertyLibrary *lib, LibertyCell *cell,
       std::string to_rf_name   = cache::readString(f);
       const Transition *from_t = Transition::find(from_rf_name);
       const Transition *to_t   = Transition::find(to_rf_name);
-      // The arc's model is whichever attrs slot matches the from-edge.
+      // Explicit attrs-slot index: writer recorded which rf slot the
+      // original arc's model pointer aliased. Inferring from from_t
+      // would mis-assign negative-unate and tristate arcs.
+      uint32_t slot = cache::readU32(f);
       TimingModel *model = nullptr;
-      if (from_t && from_t->asRiseFall())
-        model = attrs->model(from_t->asRiseFall());
+      if (slot == 0)      model = attrs->model(RiseFall::rise());
+      else if (slot == 1) model = attrs->model(RiseFall::fall());
       new TimingArc(set, from_t, to_t, model);
     }
   }
@@ -759,7 +839,7 @@ readDriverWaveforms(FILE *f, LibertyLibrary *lib)
 }
 
 void
-readCells(FILE *f, LibertyLibrary *lib)
+readCells(FILE *f, LibertyLibrary *lib, StaState *sta)
 {
   cache::expectSectionId(f, SectionId::Cells);
   uint32_t n = cache::readU32(f);
@@ -804,7 +884,7 @@ readCells(FILE *f, LibertyLibrary *lib)
     // reference any port, including outputs defined "later" in the
     // cell, so all ports must exist before any FuncExpr is read).
     LibertyBuilder builder(/*debug=*/nullptr, /*report=*/nullptr);
-    auto ports = readCellPortHeaders(f, cell, builder);
+    auto ports = readCellPortHeaders(f, lib, cell, builder);
     readCellPortDetails(f, lib, ports);
 
     // Helpers for the structures that follow (commit 3c).
@@ -934,6 +1014,18 @@ readCells(FILE *f, LibertyLibrary *lib)
       float power                  = cache::readFloat(f);
       cell->makeLeakagePower(related_pg_port, when, power);
     }
+
+    // Mirror what LibertyReader does after each cell is fully parsed:
+    // build the port→arc-set indices, translate preset/clear roles,
+    // mark default cond arcs, and resolve latch enables. Without this,
+    // `timingArcSetsTo()` returns empty (so write_liberty emits no
+    // `timing()` blocks) and `findTimingArcSet()` -- used by
+    // makeSceneMap -- can't match an arc to itself across scenes.
+    // infer_latches=false matches the cache's invariant that the
+    // source library was already finalized at write time.
+    cell->finish(/*infer_latches=*/false,
+                 sta ? sta->report() : nullptr,
+                 sta ? sta->debug()  : nullptr);
   }
 }
 
@@ -964,6 +1056,7 @@ readLibertyCache(const char *filename,
   lib->setDelayModelType(delay_model);
 
   readLibraryScalars(f, lib);
+  readUnits(f, lib);
   readBusDcls(f, lib);
   readOperatingConditions(f, lib);
   readScaleFactors(f, lib);
@@ -971,7 +1064,7 @@ readLibertyCache(const char *filename,
   readTableTemplates(f, lib);
   readOcvDerates(f, lib);
   readDriverWaveforms(f, lib);
-  readCells(f, lib);
+  readCells(f, lib, sta);
 
   cache::expectSectionId(f, SectionId::EndMarker);
   return lib;

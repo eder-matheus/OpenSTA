@@ -42,7 +42,7 @@ inline constexpr uint32_t kMagic = 0x43415453;
 // Bumped whenever the on-disk layout changes in a way that would
 // confuse an older reader. Mismatches are fatal — readers do not
 // attempt to read older versions; users must regenerate the cache.
-inline constexpr uint32_t kFormatVersion = 1;
+inline constexpr uint32_t kFormatVersion = 3;
 
 // Endian sentinel: writer always stores 0x12345678 in native order;
 // the reader checks bit-for-bit equality. A mismatch indicates the
@@ -57,6 +57,7 @@ inline constexpr uint32_t kEndianSentinel = 0x12345678;
 enum class SectionId : uint32_t {
   LibraryHeader      = 0x01,
   LibraryScalars     = 0x02,
+  Units              = 0x03,
   BusDcls            = 0x10,
   OperatingConditions = 0x11,
   ScaleFactors       = 0x12,
