@@ -250,10 +250,10 @@ OpenSTA is available in the [default repositories](https://hpc.guix.info/package
 
 ## Liberty binary cache
 
-Reading multi-GB CCS-characterized Liberty files can take 25+ minutes
-on every invocation. The binary cache snapshots a parsed
-`LibertyLibrary` to a self-sufficient on-disk artifact that subsequent
-runs reload in seconds, skipping the text parse entirely.
+Liberty parsing can dominate STA startup time. The binary cache
+snapshots a parsed `LibertyLibrary` to a self-sufficient on-disk
+artifact that subsequent runs reload directly, skipping the text
+parse entirely.
 
 Typical flow:
 
@@ -293,9 +293,8 @@ a hard error. Regenerate the cache when STA is upgraded.
 - Magic + format-version + endian sentinel + STA-version stamp at the
   head of every cache. Mismatch on any of these is a hard error.
 - Cross-architecture portability is limited to same-endian platforms.
-- For typical NLDM/CCS commercial libraries the cache covers
-  everything `read_liberty` extracts. Scaled cells (`scaled_cell`
-  groups), scan `test_cell`, bus/bundle ports, and per-port
+- The cache covers everything `read_liberty` extracts. Scaled cells
+  (`scaled_cell` groups), scan `test_cell`, and per-port
   ScaledPortMap are not yet cached.
 
 See [doc/liberty_binary_cache_plan.md](doc/liberty_binary_cache_plan.md)

@@ -58,10 +58,9 @@ using cache::SectionId;
 
 namespace {
 
-// Forward declaration: readCellPortDetails (commit 3b) calls
-// readReceiverModel for the per-port CCS receiver block (commit 4c),
-// but readReceiverModel lives in the timing-arc helper block further
-// down the file.
+// Forward declaration: readCellPortDetails calls readReceiverModel
+// for the per-port receiver block, but readReceiverModel lives in
+// the timing-arc helper block further down the file.
 ReceiverModelPtr readReceiverModel(FILE *f, LibertyLibrary *lib);
 
 void
@@ -309,7 +308,7 @@ readTableAxis(FILE *f)
   return std::make_shared<TableAxis>(variable, std::move(fs));
 }
 
-// === Table read (commit 4a) =========================================
+// === Table read =====================================================
 //
 // Mirror of writeTable in LibertyCacheWriter.cc; see the comment block
 // there for the on-disk shape.
@@ -375,7 +374,7 @@ readTableTemplates(FILE *f, LibertyLibrary *lib)
   }
 }
 
-// === Port + FuncExpr helpers (commit 3b) =============================
+// === Port + FuncExpr helpers =========================================
 //
 // Mirror of the writer-side helpers; see comment block in
 // LibertyCacheWriter.cc.
@@ -600,10 +599,10 @@ readCellPortDetails(FILE *f, LibertyLibrary *lib,
     FuncExpr *tri = readFuncExpr(f, ports);
     if (tri) p->setTristateEnable(tri);
 
-    // Per-port ReceiverModel + DriverWaveform refs (commit 4c). The
-    // writer interleaves these inside the per-port loop, so the
-    // reader has to do the same -- otherwise the file position drifts
-    // by (sizeof receiver_model + 2 strings) per port.
+    // Per-port ReceiverModel + DriverWaveform refs. The writer
+    // interleaves these inside the per-port loop, so the reader has
+    // to do the same -- otherwise the file position drifts by
+    // (sizeof receiver_model + 2 strings) per port.
     ReceiverModelPtr rm = readReceiverModel(f, lib);
     if (rm) p->setReceiverModel(std::move(rm));
     for (auto rf : RiseFall::range()) {
@@ -616,7 +615,7 @@ readCellPortDetails(FILE *f, LibertyLibrary *lib,
   }
 }
 
-// === Per-arc TableModel / TableModels read (commit 4b) ===============
+// === Per-arc TableModel / TableModels read ===========================
 
 TableModel *
 readTableModel(FILE *f, LibertyLibrary *lib)
@@ -661,7 +660,7 @@ readTableModels(FILE *f, LibertyLibrary *lib)
   return models;
 }
 
-// === ReceiverModel + OutputWaveforms read (commit 4c) ================
+// === ReceiverModel + OutputWaveforms read ============================
 
 ReceiverModelPtr
 readReceiverModel(FILE *f, LibertyLibrary *lib)
@@ -900,7 +899,7 @@ readCells(FILE *f, LibertyLibrary *lib, StaState *sta)
     auto ports = readCellPortHeaders(f, cell, builder);
     readCellPortDetails(f, lib, ports);
 
-    // Helpers for the structures that follow (commit 3c).
+    // Helpers for the structures that follow.
     auto resolve_port = [&](uint32_t idx) -> LibertyPort* {
       if (idx == 0xFFFFFFFFu || idx >= ports.size()) return nullptr;
       return ports[idx];
@@ -990,10 +989,10 @@ readCells(FILE *f, LibertyLibrary *lib, StaState *sta)
       cell->makeStatetable(in_ports, int_ports, rows);
     }
 
-    // Timing arc sets (commit 4b).
+    // Timing arc sets.
     readTimingArcSets(f, lib, cell, ports);
 
-    // === Internal power (commit 5) ==================================
+    // === Internal power =============================================
     auto resolve_port_5 = [&](uint32_t idx) -> LibertyPort* {
       if (idx == 0xFFFFFFFFu || idx >= ports.size()) return nullptr;
       return ports[idx];
@@ -1019,7 +1018,7 @@ readCells(FILE *f, LibertyLibrary *lib, StaState *sta)
                               when, models);
     }
 
-    // === Leakage power (commit 5) ===================================
+    // === Leakage power ==============================================
     uint32_t lp_count = cache::readU32(f);
     for (uint32_t i = 0; i < lp_count; ++i) {
       LibertyPort *related_pg_port = resolve_port_5(cache::readU32(f));

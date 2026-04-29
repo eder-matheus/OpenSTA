@@ -52,13 +52,13 @@ proc write_liberty { args } {
 
 ################################################################
 #
-# Binary cache commands -- skip the multi-minute Liberty parse on
-# subsequent runs by snapshotting a parsed LibertyLibrary to disk and
-# reloading directly. The cache is self-sufficient; the original .lib
-# file is not required at flow runtime.
+# Binary cache commands -- skip the Liberty parse on subsequent runs
+# by snapshotting a parsed LibertyLibrary to disk and reloading
+# directly. The cache is self-sufficient; the original .lib file is
+# not required at flow runtime.
 #
 # Use:
-#   read_liberty       big.lib                    ;# slow first time
+#   read_liberty       big.lib                    ;# initial parse
 #   write_liberty_cache [get_libs *]   big.cache  ;# one-time snapshot
 #   read_liberty_cache big.cache                  ;# subsequent runs
 

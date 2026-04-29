@@ -83,9 +83,9 @@ sourceMetadata(const std::string &filename)
   return md;
 }
 
-// Forward declarations for the CCS helpers in the timing-arc block;
-// the per-port writers below reference them too (port-level
-// ReceiverModel / DriverWaveform refs were added in commit 4c).
+// Forward declarations for the receiver-model / waveform helpers in
+// the timing-arc block; the per-port writers below reference them
+// too for the per-port ReceiverModel / DriverWaveform fields.
 void writeTableModel(FILE *f, const TableModel *model);
 void writeReceiverModel(FILE *f, const ReceiverModel *rm);
 
@@ -287,13 +287,12 @@ writeTableAxis(FILE *f, const TableAxis *axis)
   cache::writeFloatArray(f, values.data(), values.size());
 }
 
-// === Table serialization (commit 4a) =================================
+// === Table serialization =============================================
 //
 // Liberty Tables are 0/1/2/3-D float arrays attached to up to three
-// TableAxis values (slew, capacitance, etc.). Larger tables (CCS
-// timing) dominate the on-disk size of a real .lib; each row is
-// streamed as a single length-prefixed float array via writeFloatArray
-// so the parser can later reload it with one fread per row.
+// TableAxis values (slew, capacitance, etc.). Each row is streamed
+// as a single length-prefixed float array via writeFloatArray so
+// the reader can reload it with one fread per row.
 //
 // The "present" bit lets call sites pass a nullable TablePtr / Table*
 // without an extra wrapper.
@@ -361,7 +360,7 @@ writeTableTemplates(FILE *f, const LibertyLibrary *lib)
   }
 }
 
-// === Port + FuncExpr helpers (commit 3b) =============================
+// === Port + FuncExpr helpers =========================================
 //
 // FuncExpr trees can reference any LibertyPort of the owning cell. To
 // keep the format position-independent, every cell writes its full port
@@ -621,7 +620,7 @@ writeCellPortDetails(FILE *f,
     writeFuncExpr(f, p->function(), port_idx);
     writeFuncExpr(f, p->tristateEnable(), port_idx);
 
-    // Per-port ReceiverModel (CCS receiver capacitance for this port,
+    // Per-port ReceiverModel (receiver capacitance for this port,
     // independent of the per-arc receiver model on GateTableModel).
     writeReceiverModel(f, p->receiverModel());
 
@@ -635,7 +634,7 @@ writeCellPortDetails(FILE *f,
   }
 }
 
-// === Per-arc TableModel / TableModels (commit 4b) ====================
+// === Per-arc TableModel / TableModels ================================
 //
 // TableModel wraps a TablePtr together with a TableTemplate pointer
 // (looked up in the library by name on read), a ScaleFactorType, the
@@ -652,8 +651,8 @@ writeTableModel(FILE *f, const TableModel *model)
   }
   cache::writeBool(f, true);
   // Template (looked up by name + type on read). Templates are written
-  // in section TableTemplates (commit 2) so are guaranteed to be
-  // available before any cell-section deserialization.
+  // in section TableTemplates so are guaranteed to be available before
+  // any cell-section deserialization.
   TableTemplate *tt = model->tblTemplate();
   cache::writeString(f, tt ? tt->name() : std::string_view{});
   cache::writeU32(f, tt ? static_cast<uint32_t>(tt->type())
@@ -684,7 +683,7 @@ writeTableModels(FILE *f, const TableModels *models)
   writeTableModel(f, models->skewness());
 }
 
-// === ReceiverModel + OutputWaveforms (commit 4c) =====================
+// === ReceiverModel + OutputWaveforms =================================
 
 void
 writeReceiverModel(FILE *f, const ReceiverModel *rm)
@@ -753,14 +752,14 @@ writeArcModel(FILE *f, const TimingModel *model, bool is_check)
     const GateTableModel *gm = static_cast<const GateTableModel*>(model);
     writeTableModels(f, gm->delayModels());
     writeTableModels(f, gm->slewModels());
-    // CCS-specific fields. Either may be null on cells without CCS
-    // characterization.
+    // Optional fields; either may be null on cells where the
+    // corresponding model isn't characterized.
     writeReceiverModel(f, gm->receiverModel());
     writeOutputWaveforms(f, gm->outputWaveforms());
   }
 }
 
-// === TimingArcSet section (commit 4b) ================================
+// === TimingArcSet section ============================================
 
 void
 writeTimingArcSets(FILE *f, const LibertyCell *cell, const PortIndexMap &port_idx)
@@ -1004,10 +1003,10 @@ writeCells(FILE *f, const LibertyLibrary *lib)
       }
     }
 
-    // === Timing arc sets (commit 4b) ================================
+    // === Timing arc sets ============================================
     writeTimingArcSets(f, cell, port_idx);
 
-    // === Internal power (commit 5) ==================================
+    // === Internal power =============================================
     auto write_port_ref_5 = [&](const LibertyPort *p) {
       if (p == nullptr) {
         cache::writeU32(f, 0xFFFFFFFFu);
@@ -1029,7 +1028,7 @@ writeCells(FILE *f, const LibertyLibrary *lib)
         writeTableModel(f, ip.model(rf).model());
     }
 
-    // === Leakage power (commit 5) ===================================
+    // === Leakage power ==============================================
     const LeakagePowerSeq &lps = cell->leakagePowers();
     cache::writeU32(f, static_cast<uint32_t>(lps.size()));
     for (const LeakagePower &lp : lps) {

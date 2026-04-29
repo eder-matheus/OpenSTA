@@ -45,13 +45,8 @@ public:
 
 // Serialize a parsed LibertyLibrary to a binary cache file. The cache
 // is a self-sufficient checkpoint that subsequent runs can load via
-// readLibertyCache, skipping the (potentially multi-minute) Liberty
-// text parse. Throws FileNotWritable on I/O failure.
-//
-// NOTE: Commit 1 of the cache feature serializes only the library-level
-// scalar state (PVT, defaults, thresholds, delay model). Templates,
-// cells, and timing data land in subsequent commits per
-// doc/liberty_binary_cache_plan.md.
+// readLibertyCache, skipping the Liberty text parse. Throws
+// FileNotWritable on I/O failure.
 void
 writeLibertyCache(LibertyLibrary *lib,
                   const char *filename,
