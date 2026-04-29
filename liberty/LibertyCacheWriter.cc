@@ -236,7 +236,7 @@ writeOperatingConditions(FILE *f, const LibertyLibrary *lib)
   }
   // Default by name (empty if none).
   const OperatingConditions *def = lib->defaultOperatingConditions();
-  cache::writeString(f, def ? def->name() : std::string{});
+  cache::writeString(f, def ? def->name() : std::string_view{});
 }
 
 void
@@ -259,7 +259,7 @@ writeScaleFactors(FILE *f, const LibertyLibrary *lib)
     }
   }
   const ScaleFactors *def = lib->scaleFactors();
-  cache::writeString(f, def ? def->name() : std::string{});
+  cache::writeString(f, def ? def->name() : std::string_view{});
 }
 
 void
@@ -507,18 +507,14 @@ writeCellPortHeaders(FILE *f, const LibertyCell *cell)
     const LibertyPort *p = e.port;
     cache::writeU32(f, static_cast<uint32_t>(e.kind));
     cache::writeString(f, p->name());
-    cache::writeString(f, p->direction()
-                          ? std::string{p->direction()->name()}
-                          : std::string{});
+    cache::writeString(f, p->direction() ? p->direction()->name()
+                                         : std::string_view{});
 
     if (e.kind == kPortBusParent) {
       cache::writeI64(f, p->fromIndex());
       cache::writeI64(f, p->toIndex());
-      // BusDcl name (looked up on the read side via cell->findBusDcl
-      // -- which checks the cell's per-cell map first, then falls
-      // through to the library map). Empty name means "no bus_dcl".
       const BusDcl *bd = p->busDcl();
-      cache::writeString(f, bd ? bd->name() : std::string{});
+      cache::writeString(f, bd ? bd->name() : std::string_view{});
     }
     else if (e.kind == kPortBundleParent) {
       // Members were already emitted as scalar entries earlier in
@@ -634,7 +630,7 @@ writeCellPortDetails(FILE *f,
     // name means "no DriverWaveform set on this RF slot".
     for (auto rf : RiseFall::range()) {
       DriverWaveform *dw = p->driverWaveform(rf);
-      cache::writeString(f, dw ? std::string{dw->name()} : std::string{});
+      cache::writeString(f, dw ? dw->name() : std::string_view{});
     }
   }
 }
@@ -659,7 +655,7 @@ writeTableModel(FILE *f, const TableModel *model)
   // in section TableTemplates (commit 2) so are guaranteed to be
   // available before any cell-section deserialization.
   TableTemplate *tt = model->tblTemplate();
-  cache::writeString(f, tt ? tt->name() : std::string{});
+  cache::writeString(f, tt ? tt->name() : std::string_view{});
   cache::writeU32(f, tt ? static_cast<uint32_t>(tt->type())
                         : static_cast<uint32_t>(TableTemplateType::delay));
   cache::writeU32(f, static_cast<uint32_t>(model->scaleFactorType()));
@@ -783,7 +779,7 @@ writeTimingArcSets(FILE *f, const LibertyCell *cell, const PortIndexMap &port_id
     write_port_ref(set->from());
     write_port_ref(set->to());
     write_port_ref(set->relatedOut());
-    cache::writeString(f, std::string{set->role()->to_string()});
+    cache::writeString(f, set->role()->to_string());
     cache::writeBool(f, set->isCondDefault());
 
     // Attrs.
@@ -802,20 +798,18 @@ writeTimingArcSets(FILE *f, const LibertyCell *cell, const PortIndexMap &port_id
     for (auto rf : RiseFall::range())
       writeArcModel(f, set->model(rf), is_check);
 
-    // Arcs. Each arc records its from/to Transition plus the rf-slot
-    // (0=rise, 1=fall, 0xFF=none) of the attrs-level model that the
-    // arc's TimingModel pointer aliases. The slot can't be inferred
-    // from from_t alone -- LibertyBuilder keys arcs by the *output*
-    // (to) edge for negative-unate combinational arcs and by trZ1/trZ0
-    // for tristate -- so we serialize it explicitly to round-trip the
-    // exact rf assignment LibertyBuilder produced.
+    // Per-arc rf slot (0=rise, 1=fall, 0xFF=none) of the attrs model
+    // that the arc's TimingModel aliases. Stored explicitly because
+    // LibertyBuilder keys arcs by the *output* edge for negative-unate
+    // combinational and by trZ1/trZ0 for tristate -- not inferable
+    // from from_t alone.
     const TimingArcSeq &arcs = set->arcs();
     cache::writeU32(f, static_cast<uint32_t>(arcs.size()));
     const TimingModel *m_rise = set->model(RiseFall::rise());
     const TimingModel *m_fall = set->model(RiseFall::fall());
     for (const TimingArc *arc : arcs) {
-      cache::writeString(f, std::string{arc->fromEdge()->to_string()});
-      cache::writeString(f, std::string{arc->toEdge()->to_string()});
+      cache::writeString(f, arc->fromEdge()->to_string());
+      cache::writeString(f, arc->toEdge()->to_string());
       const TimingModel *am = arc->model();
       uint32_t slot = 0xFFu;
       if      (am != nullptr && am == m_rise) slot = 0;
@@ -848,7 +842,7 @@ writeOcvDerates(FILE *f, const LibertyLibrary *lib)
   }
   // Default by name (empty if none).
   const OcvDerate *def = lib->defaultOcvDerate();
-  cache::writeString(f, def ? def->name() : std::string{});
+  cache::writeString(f, def ? def->name() : std::string_view{});
 }
 
 void
@@ -923,7 +917,7 @@ writeCells(FILE *f, const LibertyLibrary *lib)
     // serialized in section ScaleFactors); store by name so the reader
     // can rebind to the freshly-loaded library map.
     const ScaleFactors *cell_sf = cell->scaleFactors();
-    cache::writeString(f, cell_sf ? cell_sf->name() : std::string{});
+    cache::writeString(f, cell_sf ? cell_sf->name() : std::string_view{});
 
     // Two-pass: port headers first so FuncExpr port refs in pass 2
     // can resolve to within-cell indices.
