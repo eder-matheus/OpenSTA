@@ -40,14 +40,14 @@ static void
 writeRaw(FILE *f, const void *data, size_t n)
 {
   if (fwrite(data, 1, n, f) != n)
-    error("liberty cache: write failed");
+    error("ldb: write failed");
 }
 
 static void
 readRaw(FILE *f, void *data, size_t n)
 {
   if (fread(data, 1, n, f) != n)
-    error("liberty cache: short read or truncated file");
+    error("ldb: short read or truncated file");
 }
 
 void writeU32(FILE *f, uint32_t v) { writeRaw(f, &v, sizeof v); }
@@ -154,7 +154,7 @@ expectSectionId(FILE *f, SectionId expected)
 {
   uint32_t got = readU32(f);
   if (got != static_cast<uint32_t>(expected))
-    error(sta::format("liberty cache: expected section {} but got {}",
+    error(sta::format("ldb: expected section {} but got {}",
                       static_cast<uint32_t>(expected), got));
 }
 

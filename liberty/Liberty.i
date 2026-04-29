@@ -133,10 +133,10 @@ write_liberty_cmd(LibertyLibrary *library,
 }
 
 bool
-read_liberty_cache_cmd(char *filename,
-                       Scene *scene,
-                       const MinMaxAll *min_max,
-                       bool ignore_source_check)
+read_ldb_cmd(char *filename,
+             Scene *scene,
+             const MinMaxAll *min_max,
+             bool ignore_source_check)
 {
   Sta *sta = Sta::sta();
   LibertyLibrary *lib = sta->readLibertyCache(filename, scene, min_max,
@@ -145,8 +145,8 @@ read_liberty_cache_cmd(char *filename,
 }
 
 void
-write_liberty_cache_cmd(LibertyLibrary *library,
-                        char *filename)
+write_ldb_cmd(LibertyLibrary *library,
+              char *filename)
 {
   writeLibertyCache(library, filename, Sta::sta());
 }

@@ -52,38 +52,38 @@ proc write_liberty { args } {
 
 ################################################################
 #
-# Binary cache commands -- skip the Liberty parse on subsequent runs
-# by snapshotting a parsed LibertyLibrary to disk and reloading
-# directly. The cache is self-sufficient; the original .lib file is
-# not required at flow runtime.
+# LDB (Liberty database) commands -- skip the Liberty parse on
+# subsequent runs by snapshotting a parsed LibertyLibrary to disk and
+# reloading directly. The database is self-sufficient; the original
+# .lib file is not required at flow runtime.
 #
 # Use:
-#   read_liberty       big.lib                    ;# initial parse
-#   write_liberty_cache [get_libs *]   big.cache  ;# one-time snapshot
-#   read_liberty_cache big.cache                  ;# subsequent runs
+#   read_liberty big.lib                  ;# initial parse
+#   write_ldb    [get_libs *] big.ldb     ;# one-time snapshot
+#   read_ldb     big.ldb                  ;# subsequent runs
 
-define_cmd_args "read_liberty_cache" \
+define_cmd_args "read_ldb" \
   {[-corner corner] [-min] [-max] [-ignore_source_check] filename}
 
-proc_redirect read_liberty_cache {
-  parse_key_args "read_liberty_cache" args keys {-corner} \
+proc_redirect read_ldb {
+  parse_key_args "read_ldb" args keys {-corner} \
     flags {-min -max -ignore_source_check}
-  check_argc_eq1 "read_liberty_cache" $args
+  check_argc_eq1 "read_ldb" $args
 
   set filename [file nativename [lindex $args 0]]
   set corner [parse_scene keys]
   set min_max [parse_min_max_all_flags flags]
   set ignore_source_check [info exists flags(-ignore_source_check)]
-  read_liberty_cache_cmd $filename $corner $min_max $ignore_source_check
+  read_ldb_cmd $filename $corner $min_max $ignore_source_check
 }
 
-define_cmd_args "write_liberty_cache" {library filename}
+define_cmd_args "write_ldb" {library filename}
 
-proc write_liberty_cache { args } {
-  check_argc_eq2 "write_liberty_cache" $args
+proc write_ldb { args } {
+  check_argc_eq2 "write_ldb" $args
   set library [get_liberty_error "library" [lindex $args 0]]
   set filename [file nativename [lindex $args 1]]
-  write_liberty_cache_cmd $library $filename
+  write_ldb_cmd $library $filename
 }
 
 ################################################################

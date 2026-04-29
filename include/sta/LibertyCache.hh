@@ -43,24 +43,24 @@ public:
     : std::runtime_error(msg) {}
 };
 
-// Serialize a parsed LibertyLibrary to a binary cache file. The cache
-// is a self-sufficient checkpoint that subsequent runs can load via
-// readLibertyCache, skipping the Liberty text parse. Throws
+// Serialize a parsed LibertyLibrary to an LDB (Liberty database) file.
+// The file is a self-sufficient checkpoint that subsequent runs can
+// load via readLibertyCache, skipping the Liberty text parse. Throws
 // FileNotWritable on I/O failure.
 void
 writeLibertyCache(LibertyLibrary *lib,
                   const char *filename,
                   StaState *sta);
 
-// Load a LibertyLibrary from a binary cache produced by
+// Load a LibertyLibrary from an LDB file produced by
 // writeLibertyCache. Returns the new LibertyLibrary owned by the
 // network on success.
 //
-// If ignore_source_check is false (the default flow), the cache's
-// recorded source-file size and mtime are compared against the source
-// at the path stamped in the cache header; a mismatch throws an error
-// rather than serving potentially stale data. Set ignore_source_check
-// to true to skip this check (useful when the cache is intentionally
+// If ignore_source_check is false (the default flow), the recorded
+// source-file size and mtime are compared against the source at the
+// path stamped in the LDB header; a mismatch throws an error rather
+// than serving potentially stale data. Set ignore_source_check to
+// true to skip this check (useful when the LDB is intentionally
 // distributed without the source).
 //
 // Throws FileNotReadable on I/O failure or

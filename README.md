@@ -248,52 +248,52 @@ OpenSTA is available in the [default repositories](https://hpc.guix.info/package
   guix install opensta
 ```
 
-## Liberty binary cache
+## LDB (Liberty database)
 
-Liberty parsing can dominate STA startup time. The binary cache
-snapshots a parsed `LibertyLibrary` to a self-sufficient on-disk
-artifact that subsequent runs reload directly, skipping the text
-parse entirely.
+Liberty parsing can dominate STA startup time. LDB is a binary
+on-disk format that snapshots a parsed `LibertyLibrary` so subsequent
+runs reload directly, skipping the text parse entirely. LDB files
+use the `.ldb` extension.
 
 Typical flow:
 
 ```tcl
 # One-time: parse the source .lib and snapshot it.
 read_liberty big.lib
-write_liberty_cache [lindex [get_libs *] 0] big.cache
+write_ldb    [lindex [get_libs *] 0] big.ldb
 
-# Subsequent runs: load directly from the cache.
-read_liberty_cache big.cache
+# Subsequent runs: load directly from the database.
+read_ldb     big.ldb
 report_checks ...   # exactly as if the .lib had been parsed
 ```
 
-The cache is **complementary** to OpenROAD's ODB, not a replacement:
-ODB serializes design state (netlist, placement, routing); the
-Liberty cache serializes technology library state. They cover
-different inputs and can coexist in the same flow.
+LDB is **complementary** to OpenROAD's ODB, not a replacement: ODB
+serializes design state (netlist, placement, routing); LDB serializes
+technology library state. They cover different inputs and can coexist
+in the same flow.
 
-### `write_liberty_cache library filename`
+### `write_ldb library filename`
 
-Writes the in-memory `LibertyLibrary` to a binary cache file. The
-header records the source `.lib` filename, size, and mtime so the
-reader can detect stale caches.
+Writes the in-memory `LibertyLibrary` to a `.ldb` file. The header
+records the source `.lib` filename, size, and mtime so the reader can
+detect stale databases.
 
-### `read_liberty_cache [-corner corner] [-min] [-max] [-ignore_source_check] filename`
+### `read_ldb [-corner corner] [-min] [-max] [-ignore_source_check] filename`
 
-Loads a cached library. By default, errors out if the source `.lib`
-recorded in the cache header has changed (different size or mtime),
-or is missing. Pass `-ignore_source_check` to load anyway -- useful
-for caches distributed without their source.
+Loads a `.ldb` library. By default, errors out if the source `.lib`
+recorded in the header has changed (different size or mtime), or is
+missing. Pass `-ignore_source_check` to load anyway -- useful for
+databases distributed without their source.
 
-The cache is tied to the STA build: any STA version mismatch is also
-a hard error. Regenerate the cache when STA is upgraded.
+LDB is tied to the STA build: any STA version mismatch is also a
+hard error. Regenerate the `.ldb` when STA is upgraded.
 
 ### Format / robustness
 
 - Magic + format-version + endian sentinel + STA-version stamp at the
-  head of every cache. Mismatch on any of these is a hard error.
+  head of every `.ldb`. Mismatch on any of these is a hard error.
 - Cross-architecture portability is limited to same-endian platforms.
-- The cache covers everything `read_liberty` extracts. Scaled cells
+- LDB covers everything `read_liberty` extracts. Scaled cells
   (`scaled_cell` groups), scan `test_cell`, and per-port
   ScaledPortMap are not yet cached.
 

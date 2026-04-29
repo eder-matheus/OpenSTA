@@ -71,24 +71,24 @@ readHeader(FILE *f,
 {
   uint32_t magic = cache::readU32(f);
   if (magic != cache::kMagic)
-    cache::error(sta::format("liberty cache: bad magic 0x{:x} (expected 0x{:x})",
+    cache::error(sta::format("ldb: bad magic 0x{:x} (expected 0x{:x})",
                              magic, cache::kMagic));
   uint32_t version = cache::readU32(f);
   if (version != cache::kFormatVersion)
     cache::error(sta::format(
-        "liberty cache: format version {} not supported (this build expects {}); "
+        "ldb: format version {} not supported (this build expects {}); "
         "regenerate the cache with this version of STA.",
         version, cache::kFormatVersion));
   uint32_t endian = cache::readU32(f);
   if (endian != cache::kEndianSentinel)
-    cache::error("liberty cache: endian mismatch (cache was written on a "
+    cache::error("ldb: endian mismatch (cache was written on a "
                  "host with the opposite byte order; not supported)");
   cache::readU32(f); // flags (reserved, ignored in v1)
 
   std::string sta_version = cache::readString(f);
   if (sta_version != STA_VERSION)
     cache::error(sta::format(
-        "liberty cache: STA version mismatch (cache='{}', this build='{}'); "
+        "ldb: STA version mismatch (cache='{}', this build='{}'); "
         "regenerate the cache.",
         sta_version, STA_VERSION));
 
@@ -110,7 +110,7 @@ readHeader(FILE *f,
     // here we treat the missing source as a hard error to surface
     // moved/renamed .lib mistakes.
     cache::error(sta::format(
-        "liberty cache: source file '{}' is missing; pass "
+        "ldb: source file '{}' is missing; pass "
         "-ignore_source_check to load anyway.", source_filename));
 
   uint64_t cur_size = static_cast<uint64_t>(std::filesystem::file_size(path, ec));
@@ -119,7 +119,7 @@ readHeader(FILE *f,
                         ftime.time_since_epoch()).count();
   if (cur_size != source_size || cur_mtime != source_mtime)
     cache::error(sta::format(
-        "liberty cache: source file '{}' has changed since the cache was "
+        "ldb: source file '{}' has changed since the cache was "
         "written (size {}->{}, mtime {}->{}); regenerate the cache or pass "
         "-ignore_source_check.",
         source_filename, source_size, cur_size, source_mtime, cur_mtime));
@@ -348,7 +348,7 @@ readTablePtr(FILE *f)
     return std::make_shared<Table>(std::move(rows), axis1, axis2, axis3);
   }
   default:
-    cache::error(sta::format("liberty cache: unsupported table order {}", order));
+    cache::error(sta::format("ldb: unsupported table order {}", order));
   }
   return nullptr;
 }

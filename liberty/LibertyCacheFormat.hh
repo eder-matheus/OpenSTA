@@ -36,8 +36,9 @@ namespace sta {
 
 namespace cache {
 
-// 'S','T','A','C' as little-endian u32. Identifies a Liberty cache file.
-inline constexpr uint32_t kMagic = 0x43415453;
+// 'O','S','L','D' as little-endian u32. Identifies an LDB (Liberty
+// database) file produced by writeLibertyCache.
+inline constexpr uint32_t kMagic = 0x444C534F;
 
 // Bumped whenever the on-disk layout changes in a way that would
 // confuse an older reader. Mismatches are fatal — readers do not

@@ -341,7 +341,7 @@ writeTable(FILE *f, const Table *table)
     break;
   }
   default:
-    cache::error(sta::format("liberty cache: unsupported table order {}", order));
+    cache::error(sta::format("ldb: unsupported table order {}", order));
   }
 }
 

@@ -730,7 +730,7 @@ Sta::readLibertyCache(std::string_view filename,
     readLibertyAfter(library, scene, min_max);
     network_->readLibertyAfter(library);
   }
-  stats.report("Read liberty cache");
+  stats.report("Read ldb");
   return library;
 }
 
