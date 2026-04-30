@@ -149,6 +149,21 @@ public:
                                       Scene *scene,
                                       const MinMaxAll *min_max,
                                       bool infer_latches);
+  // Parse a Liberty file and write a Liberty Parse Cache (.lpc) file
+  // capturing the parser's visitor event stream. Subsequent loads via
+  // readLpc replay the events and skip the lex+parse work. The
+  // library is also wired into the network as a side effect, the
+  // same way readLiberty would.
+  virtual LibertyLibrary *writeLpc(std::string_view source_lib_path,
+                                   std::string_view lpc_path,
+                                   Scene *scene,
+                                   const MinMaxAll *min_max,
+                                   bool infer_latches);
+  virtual LibertyLibrary *readLpc(std::string_view lpc_path,
+                                  Scene *scene,
+                                  const MinMaxAll *min_max,
+                                  bool ignore_source_check,
+                                  bool infer_latches);
   // tmp public
   void readLibertyAfter(LibertyLibrary *liberty,
                         Scene *scene,

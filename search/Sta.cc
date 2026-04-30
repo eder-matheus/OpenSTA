@@ -64,6 +64,7 @@
 #include "Latches.hh"
 #include "Levelize.hh"
 #include "Liberty.hh"
+#include "LibertyParseCache.hh"
 #include "LibertyClass.hh"
 #include "LibertyWriter.hh"
 #include "Machine.hh"
@@ -717,6 +718,54 @@ Sta::readLibertyFile(std::string_view filename,
     readLibertyAfter(liberty, scene, min_max);
     network_->readLibertyAfter(liberty);
   }
+  return liberty;
+}
+
+LibertyLibrary *
+Sta::writeLpc(std::string_view source_lib_path,
+              std::string_view lpc_path,
+              Scene *scene,
+              const MinMaxAll *min_max,
+              bool infer_latches)
+{
+  Stats stats(debug_, report_);
+  LibertyLibrary *liberty = sta::writeLibertyParseCache(source_lib_path,
+                                                        lpc_path,
+                                                        infer_latches,
+                                                        network_);
+  if (liberty) {
+    readLibertyAfter(liberty, scene, min_max);
+    network_->readLibertyAfter(liberty);
+    if (network_->defaultLibertyLibrary() == nullptr) {
+      network_->setDefaultLibertyLibrary(liberty);
+      *units_ = *liberty->units();
+    }
+  }
+  stats.report("Write lpc");
+  return liberty;
+}
+
+LibertyLibrary *
+Sta::readLpc(std::string_view lpc_path,
+             Scene *scene,
+             const MinMaxAll *min_max,
+             bool ignore_source_check,
+             bool infer_latches)
+{
+  Stats stats(debug_, report_);
+  LibertyLibrary *liberty = sta::readLibertyParseCache(lpc_path,
+                                                       ignore_source_check,
+                                                       infer_latches,
+                                                       network_);
+  if (liberty) {
+    readLibertyAfter(liberty, scene, min_max);
+    network_->readLibertyAfter(liberty);
+    if (network_->defaultLibertyLibrary() == nullptr) {
+      network_->setDefaultLibertyLibrary(liberty);
+      *units_ = *liberty->units();
+    }
+  }
+  stats.report("Read lpc");
   return liberty;
 }
 

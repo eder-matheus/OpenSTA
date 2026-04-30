@@ -131,6 +131,32 @@ write_liberty_cmd(LibertyLibrary *library,
   writeLiberty(library, filename, Sta::sta());
 }
 
+bool
+write_lpc_cmd(char *source_lib_path,
+              char *lpc_path,
+              Scene *scene,
+              const MinMaxAll *min_max,
+              bool infer_latches)
+{
+  Sta *sta = Sta::sta();
+  LibertyLibrary *lib = sta->writeLpc(source_lib_path, lpc_path,
+                                       scene, min_max, infer_latches);
+  return (lib != nullptr);
+}
+
+bool
+read_lpc_cmd(char *lpc_path,
+             Scene *scene,
+             const MinMaxAll *min_max,
+             bool ignore_source_check,
+             bool infer_latches)
+{
+  Sta *sta = Sta::sta();
+  LibertyLibrary *lib = sta->readLpc(lpc_path, scene, min_max,
+                                      ignore_source_check, infer_latches);
+  return (lib != nullptr);
+}
+
 void
 make_equiv_cells(LibertyLibrary *lib)
 {

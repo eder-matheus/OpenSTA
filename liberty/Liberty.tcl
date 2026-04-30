@@ -51,6 +51,47 @@ proc write_liberty { args } {
 }
 
 ################################################################
+#
+# Liberty Parse Cache (LPC) commands -- parser-event snapshot of a
+# .lib that subsequent runs can replay to skip the lex+parse work.
+#
+# Use:
+#   write_lpc big.lib big.lpc                ;# convert .lib -> .lpc
+#   read_lpc big.lpc                          ;# subsequent runs
+
+define_cmd_args "write_lpc" \
+  {[-corner corner] [-min] [-max] [-infer_latches] source_lib_path lpc_path}
+
+proc_redirect write_lpc {
+  parse_key_args "write_lpc" args keys {-corner} \
+    flags {-min -max -infer_latches}
+  check_argc_eq2 "write_lpc" $args
+
+  set source_lib_path [file nativename [lindex $args 0]]
+  set lpc_path [file nativename [lindex $args 1]]
+  set corner [parse_scene keys]
+  set min_max [parse_min_max_all_flags flags]
+  set infer_latches [info exists flags(-infer_latches)]
+  write_lpc_cmd $source_lib_path $lpc_path $corner $min_max $infer_latches
+}
+
+define_cmd_args "read_lpc" \
+  {[-corner corner] [-min] [-max] [-ignore_source_check] [-infer_latches] filename}
+
+proc_redirect read_lpc {
+  parse_key_args "read_lpc" args keys {-corner} \
+    flags {-min -max -ignore_source_check -infer_latches}
+  check_argc_eq1 "read_lpc" $args
+
+  set filename [file nativename [lindex $args 0]]
+  set corner [parse_scene keys]
+  set min_max [parse_min_max_all_flags flags]
+  set ignore_source_check [info exists flags(-ignore_source_check)]
+  set infer_latches [info exists flags(-infer_latches)]
+  read_lpc_cmd $filename $corner $min_max $ignore_source_check $infer_latches
+}
+
+################################################################
 
 define_cmd_args "report_lib_cell" {cell_name [> filename] [>> filename]}
 
