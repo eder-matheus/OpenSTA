@@ -109,6 +109,9 @@ set(STA_SOURCE
   liberty/LibertyBuilder.cc
   liberty/LibExprReader.cc
   liberty/LibertyParser.cc
+  liberty/LibertyParseCacheFormat.cc
+  liberty/LibertyParseCacheReader.cc
+  liberty/LibertyParseCacheWriter.cc
   liberty/LibertyReader.cc
   liberty/LibertyWriter.cc
   liberty/LinearModel.cc
