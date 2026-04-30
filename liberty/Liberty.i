@@ -30,6 +30,11 @@
 #include "LibertyCache.hh"
 #include "LibertyWriter.hh"
 #include "Sta.hh"
+// Cache benchmark probes; see "Cache benchmark probes" block below.
+#include "InternalPower.hh"
+#include "LeakagePower.hh"
+#include "Sequential.hh"
+#include "FuncExpr.hh"
 
 using namespace sta;
 
@@ -588,3 +593,142 @@ bool has_next() { return self->hasNext(); }
 LibertyPort *next() { return self->next(); }
 void finish() { delete self; }
 } // LibertyPortMemberIterator methods
+
+////////////////////////////////////////////////////////////////
+// Cache benchmark probes -- TEST-ONLY.
+//
+// These bindings are used by test/cache_benchmark/dump_lib.tcl to
+// produce the "dump diff" equivalence check. They expose the few
+// LibertyCell sub-structures (internal_power groups, leakage_power
+// groups, sequentials, statetable) that aren't reachable through
+// STA's stable Tcl introspection API and aren't re-emitted by
+// write_liberty either.
+//
+// NOT part of the public STA Tcl surface. Safe to remove together
+// with the cache benchmark harness.
+////////////////////////////////////////////////////////////////
+
+class InternalPower
+{
+private:
+  InternalPower();
+  ~InternalPower();
+};
+
+class LeakagePower
+{
+private:
+  LeakagePower();
+  ~LeakagePower();
+};
+
+class Sequential
+{
+private:
+  Sequential();
+  ~Sequential();
+};
+
+class Statetable
+{
+private:
+  Statetable();
+  ~Statetable();
+};
+
+%extend LibertyCell {
+size_t internal_power_count() { return self->internalPowers().size(); }
+InternalPower *
+internal_power_at(size_t i)
+{
+  if (i >= self->internalPowers().size()) return nullptr;
+  return const_cast<InternalPower*>(&self->internalPowers()[i]);
+}
+
+size_t leakage_power_count() { return self->leakagePowers().size(); }
+LeakagePower *
+leakage_power_at(size_t i)
+{
+  if (i >= self->leakagePowers().size()) return nullptr;
+  return const_cast<LeakagePower*>(&self->leakagePowers()[i]);
+}
+
+size_t sequential_count() { return self->sequentials().size(); }
+Sequential *
+sequential_at(size_t i)
+{
+  if (i >= self->sequentials().size()) return nullptr;
+  return const_cast<Sequential*>(&self->sequentials()[i]);
+}
+
+Statetable *statetable_or_null() { return const_cast<Statetable*>(self->statetable()); }
+} // LibertyCell cache-benchmark probes
+
+%extend InternalPower {
+const char *port_name()
+{
+  LibertyPort *p = self->port();
+  return p ? p->name().c_str() : "";
+}
+const char *related_port_name()
+{
+  LibertyPort *p = self->relatedPort();
+  return p ? p->name().c_str() : "";
+}
+const char *related_pg_pin_name()
+{
+  LibertyPort *p = self->relatedPgPin();
+  return p ? p->name().c_str() : "";
+}
+std::string when_str()
+{
+  FuncExpr *w = self->when();
+  return w ? w->to_string() : std::string{};
+}
+} // InternalPower cache-benchmark probes
+
+%extend LeakagePower {
+const char *related_pg_port_name()
+{
+  LibertyPort *p = self->relatedPgPort();
+  return p ? p->name().c_str() : "";
+}
+std::string when_str()
+{
+  FuncExpr *w = self->when();
+  return w ? w->to_string() : std::string{};
+}
+float power_value() { return self->power(); }
+} // LeakagePower cache-benchmark probes
+
+%extend Sequential {
+bool is_register() { return self->isRegister(); }
+std::string clock_str()  { return self->clock()  ? self->clock()->to_string()  : std::string{}; }
+std::string data_str()   { return self->data()   ? self->data()->to_string()   : std::string{}; }
+std::string clear_str()  { return self->clear()  ? self->clear()->to_string()  : std::string{}; }
+std::string preset_str() { return self->preset() ? self->preset()->to_string() : std::string{}; }
+const char *output_name()
+{
+  LibertyPort *p = self->output();
+  return p ? p->name().c_str() : "";
+}
+const char *output_inv_name()
+{
+  LibertyPort *p = self->outputInv();
+  return p ? p->name().c_str() : "";
+}
+} // Sequential cache-benchmark probes
+
+%extend Statetable {
+size_t input_port_count()    { return self->inputPorts().size(); }
+size_t internal_port_count() { return self->internalPorts().size(); }
+size_t row_count()           { return self->table().size(); }
+LibertyPort *input_port_at(size_t i)
+{
+  return (i < self->inputPorts().size()) ? self->inputPorts()[i] : nullptr;
+}
+LibertyPort *internal_port_at(size_t i)
+{
+  return (i < self->internalPorts().size()) ? self->internalPorts()[i] : nullptr;
+}
+} // Statetable cache-benchmark probes
