@@ -27,6 +27,7 @@
 #include <Eigen/LU>
 #include <Eigen/QR>
 #include <cmath>  // abs
+#include <string>
 #include <string_view>
 
 #include "Debug.hh"
@@ -837,8 +838,22 @@ PrimaDelayCalc::primaReduce()
   G_.makeCompressed();
   // Step 3: solve G*R = B for R
   Eigen::SparseLU<MatrixSd> G_solver(G_);
-  if (G_solver.info() != Eigen::Success)
-    report_->error(1752, "G matrix is singular.");
+  if (G_solver.info() != Eigen::Success) {
+    std::string net_name = "<unknown>";
+    std::string drvr_name = "<unknown>";
+    if (dcalc_args_ != nullptr && !dcalc_args_->empty()) {
+      const Pin *drvr_pin = (*dcalc_args_)[0].drvrPin();
+      if (drvr_pin != nullptr) {
+        drvr_name = sdc_network_->pathName(drvr_pin);
+        const Net *net = network_->net(drvr_pin);
+        if (net != nullptr)
+          net_name = sdc_network_->pathName(net);
+      }
+    }
+    report_->error(1752,
+                   "G matrix is singular for net {} (driver pin {}).",
+                   net_name, drvr_name);
+  }
   Eigen::MatrixXd R(order_, port_count_);
   R = G_solver.solve(B_);
 
