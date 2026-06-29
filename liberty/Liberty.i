@@ -28,7 +28,12 @@
 #include "Liberty.hh"
 #include "EquivCells.hh"
 #include "LibertyWriter.hh"
+#include "LibertyBinaryWriter.hh"
 #include "Sta.hh"
+#include "Zlib.hh"
+#include "Error.hh"
+
+#include <fstream>
 
 using namespace sta;
 
@@ -129,6 +134,19 @@ write_liberty_cmd(LibertyLibrary *library,
                   char *filename)
 {
   writeLiberty(library, filename, Sta::sta());
+}
+
+void write_liberty_binary_cmd(const char *in_filename, const char *out_filename) {
+  gzstream::igzstream in_stream(in_filename);
+  if (!in_stream.good()) {
+    throw FileNotReadable(in_filename);
+  }
+  std::ofstream out_stream(out_filename, std::ios::binary);
+
+  if (!out_stream) {
+    throw FileNotWritable(out_filename);
+  }
+  writeLibertyBinary(&in_stream, &out_stream, Sta::sta()->report());
 }
 
 void
