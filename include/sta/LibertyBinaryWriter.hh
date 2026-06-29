@@ -53,6 +53,9 @@ private:
 
   std::ostream *stream_;
   std::unordered_map<std::string, std::uint32_t> string_table_;
+  // Open group nesting depth; used to free top-level group subtrees once
+  // serialized so large libraries don't accumulate in memory.
+  int depth_ = 0;
 };
 
 void

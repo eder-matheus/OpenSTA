@@ -110,6 +110,7 @@ void
 LibertyBinaryWriter::begin(const LibertyGroup *group,
                            LibertyGroup *)
 {
+  depth_++;
   writeTag(static_cast<uint8_t>(LibertyBinaryTag::GROUP_BEGIN));
   writeString(group->type());
 
@@ -122,9 +123,18 @@ LibertyBinaryWriter::begin(const LibertyGroup *group,
 
 void
 LibertyBinaryWriter::end(const LibertyGroup *,
-                         LibertyGroup *)
+                         LibertyGroup *parent_group)
 {
   writeTag(static_cast<uint8_t>(LibertyBinaryTag::GROUP_END));
+  depth_--;
+  // LibertyParser retains the whole group tree as it parses. Once a top-level
+  // group (a cell, table template, etc. directly under the library) has been
+  // fully serialized, its subtree is no longer needed, so release it to bound
+  // peak memory. This mirrors LibertyReader::endCell clearing library_group,
+  // and lets large libraries stream with ~one-cell memory instead of holding
+  // the entire (uncompressed) file in RAM.
+  if (depth_ == 1 && parent_group)
+    parent_group->clear();
 }
 
 void
