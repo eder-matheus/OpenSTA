@@ -25,6 +25,7 @@
 #pragma once
 
 #include <functional>
+#include <iosfwd>
 #include <string_view>
 #include <vector>
 #include <map>
@@ -99,21 +100,26 @@ private:
   LibertyGroupSeq group_stack_;
 };
 
-// Attribute values are a string or float.
+// Attribute values are a string, float or float sequence.
 class LibertyAttrValue
 {
 public:
   LibertyAttrValue(float value);
   LibertyAttrValue(std::string &&value);
+  LibertyAttrValue(std::vector<float> &&values);
   bool isString() const;
   bool isFloat() const;
+  bool isFloatSeq() const;
   std::pair<float, bool> floatValue() const;
+  // Append this value's floats to seq.
+  void fillFloatSeq(std::vector<float> *seq) const;
   const std::string &stringValue() const { return string_value_; }
   std::string &stringValue() { return string_value_; }
 
 private:
-  float float_value_;
+  float float_value_ = 0.0f;
   std::string string_value_;
+  std::vector<float> float_seq_;
 };
 
 // Groups are a type keyword with a set of parameters and statements
@@ -279,6 +285,14 @@ public:
 
 void
 parseLibertyFile(std::string_view filename,
+                 LibertyGroupVisitor *library_visitor,
+                 Report *report);
+
+// Parse liberty from an already-open stream (used by the binary writer
+// to read a text liberty file without reopening it).
+void
+parseLibertyFile(std::istream *stream,
+                 std::string_view filename,
                  LibertyGroupVisitor *library_visitor,
                  Report *report);
 } // namespace sta

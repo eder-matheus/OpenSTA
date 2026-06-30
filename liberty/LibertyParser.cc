@@ -58,6 +58,18 @@ parseLibertyFile(std::string_view filename,
     throw FileNotReadable(filename);
 }
 
+void
+parseLibertyFile(std::istream *stream,
+                 std::string_view filename,
+                 LibertyGroupVisitor *library_visitor,
+                 Report *report)
+{
+  LibertyParser reader(filename, library_visitor, report);
+  LibertyScanner scanner(stream, filename, &reader, report);
+  LibertyParse parser(&scanner, &reader);
+  parser.parse();
+}
+
 LibertyParser::LibertyParser(std::string_view filename,
                              LibertyGroupVisitor *library_visitor,
                              Report *report) :
@@ -569,16 +581,27 @@ LibertyAttrValue::LibertyAttrValue(float value) :
 {
 }
 
+LibertyAttrValue::LibertyAttrValue(std::vector<float> &&values) :
+  float_seq_(std::move(values))
+{
+}
+
 bool
 LibertyAttrValue::isFloat() const
 {
-  return string_value_.empty();
+  return string_value_.empty() && float_seq_.empty();
 }
 
 bool
 LibertyAttrValue::isString() const
 {
   return !string_value_.empty();
+}
+
+bool
+LibertyAttrValue::isFloatSeq() const
+{
+  return !float_seq_.empty();
 }
 
 std::pair<float, bool>
@@ -588,6 +611,12 @@ LibertyAttrValue::floatValue() const
     return {float_value_, true};
   else
     return stringFloat(string_value_);
+}
+
+void
+LibertyAttrValue::fillFloatSeq(std::vector<float> *seq) const
+{
+  seq->insert(seq->end(), float_seq_.begin(), float_seq_.end());
 }
 
 ////////////////////////////////////////////////////////////////
