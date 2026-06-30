@@ -1,5 +1,5 @@
 // OpenSTA, Static Timing Analyzer
-// Copyright (c) 2025, Parallax Software, Inc.
+// Copyright (c) 2026, Parallax Software, Inc.
 // 
 // This program is free software: you can redistribute it and/or modify
 // it under the terms of the GNU General Public License as published by
@@ -24,13 +24,16 @@
 
 #pragma once
 
+#include <string>
+
 namespace sta {
 
 class Sta;
 
 void
-readVcdActivities(const char *filename,
-                  const char *scope,
+readVcdActivities(std::string_view filename,
+                  std::string_view scope,
+                  std::string_view mode_name,
                   Sta *sta);
 
-} // namespace
+} // namespace sta

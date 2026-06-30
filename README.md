@@ -104,6 +104,7 @@ eigen       3.4.0   3.4.0   MPL2  required
 cudd        3.0.0   3.0.0   BSD   required
 tclreadline 2.3.8   2.3.8   BSD   optional
 zLib        1.2.5   1.2.8   zlib  optional
+libfmt      8.1.1   N/A     MIT   required if std::format not available
 ```
 
 The [TCL readline library](https://tclreadline.sourceforge.net/tclreadline.html)
@@ -124,24 +125,27 @@ if { ![catch {package require tclreadline}] } {
 The Zlib library is an optional.  If CMake finds libz, OpenSTA can
 read Liberty, Verilog, SDF, SPF, and SPEF files compressed with gzip.
 
-CUDD is a binary decision diageram (BDD) package that is used to
-improve conditional timing arc handling, constant propagation, power
-activity propagation and spice netlist generation.
+[CUDD](https://github.com/cuddorg/cudd) is a binary decision diagram (BDD)
+package that is used to improve conditional timing arc handling, constant
+propagation, power activity propagation and spice netlist generation.
 
-CUDD is available
-[here](https://github.com/davidkebo/cudd/blob/main/cudd_versions/cudd-3.0.0.tar.gz).
-
-Unpack and build CUDD.
+Download and build CUDD:
 
 ```
-tar xvfz cudd-3.0.0.tar.gz
-cd cudd-3.0.0
+git clone https://github.com/cuddorg/cudd.git
+cd cudd
+git checkout 3.0.0
 ./configure
 make
 ```
 
 You can use the "configure --prefix" option and "make install" to install CUDD
 in a different directory.
+
+Modern c++ compilers that support c++20 include support for std::format.
+With older compilers like gcc 11 on Ubuntu 22.04 and Centos7 the fmt library
+is used instead. If it is not installed locally, the github repository is
+downloaded and compiled in the build directory.
 
 ### Building with CMake
 
@@ -184,13 +188,23 @@ files in the build directory.
 
 ## Build with Docker
 
-An alternative way to build and run OpenSTA is with
+AN alternative way to build and run OpenSTA is with
 [Docker](https://www.docker.com).  After installing Docker, the
 following command builds a Docker image.
 
 ```
 cd OpenSTA
-docker build --file Dockerfile.ubuntu22.04 --tag opensta_ubuntu22.04 .
+docker build --file Dockerfile.ubuntu24.04 --tag opensta_ubuntu24.04 .
+or
+docker build --file Dockerfile.centos7 --tag opensta_centos7 .
+```
+
+The centos7 build on mac/OsX with ARM processorts requires the platform
+to be specified.
+
+```
+docker build --file Dockerfile.centos7 --platform=linux/amd64 --tag opensta_centos7 .
+
 ```
 
 To run a docker container using the OpenSTA image, use the -v option
@@ -243,21 +257,19 @@ should be a short description of the problem. Attach a test case to
 reproduce the issue as described below. Issues without test cases are
 unlikely to get a response.
 
-The files in the test case should be collected into a directory named
-YYYYMMDD where YYYY is the year, MM is the month, and DD is the
-day (this format allows "ls" to report them in chronological order).
-The contents of the directory should be collected into a compressed
-tarfile named YYYYMMDD.tgz.
-
 The test case should have a tcl command file recreates the issue named
-run.tcl. If there are more than one command file using the same data
+run.tcl. If is are more than one command file using the same data
 files, there should be separate command files, run1.tcl, run2.tcl
 etc. The bug report can refer to these command files by name.
 
 Command files should not have absolute filenames like
-"/home/cho/OpenSTA_Request/write_path_spice/dump_spice" in them.
+"/home/john/OpenSTA_bug/write_path_spice/dump_spice" in them.
 These obviously are not portable. Use filenames relative to the test
 case directory.
+
+The files in the test case should be collected into a directory.
+The contents of the directory should be collected into a compressed
+tarfile.
 
 ## Contributions
 

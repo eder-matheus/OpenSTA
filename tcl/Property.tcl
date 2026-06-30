@@ -1,5 +1,5 @@
 # OpenSTA, Static Timing Analyzer
-# Copyright (c) 2025, Parallax Software, Inc.
+# Copyright (c) 2026, Parallax Software, Inc.
 # 
 # This program is free software: you can redistribute it and/or modify
 # it under the terms of the GNU General Public License as published by
@@ -57,6 +57,10 @@ proc get_object_property { object prop } {
       return [net_property $object $prop]
     } elseif { $object_type == "Clock" } {
       return [clock_property $object $prop]
+    } elseif { $object_type == "Scene" } {
+      return [scene_property $object $prop]
+    } elseif { $object_type == "Mode" } {
+      return [mode_property $object $prop]
     } elseif { $object_type == "Port" } {
       return [port_property $object $prop]
     } elseif { $object_type == "LibertyPort" } {

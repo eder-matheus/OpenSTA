@@ -1,5 +1,5 @@
 # OpenSTA, Static Timing Analyzer
-# Copyright (c) 2025, Parallax Software, Inc.
+# Copyright (c) 2026, Parallax Software, Inc.
 # 
 # This program is free software: you can redistribute it and/or modify
 # it under the terms of the GNU General Public License as published by
@@ -31,22 +31,25 @@ proc_redirect read_verilog {
   read_verilog_cmd [file nativename [lindex $args 0]]
 }
 
-define_cmd_args "write_verilog" {[-sort] [-include_pwr_gnd]\
-				   [-remove_cells cells] filename}
+define_cmd_args "write_verilog" {[-include_pwr_gnd]\
+                                   [-remove_cells cells] filename}
 
 proc write_verilog { args } {
+  # -sort deprecated 12/12/2025
   parse_key_args "write_verilog" args keys {-remove_cells} \
     flags {-sort -include_pwr_gnd}
 
+  if { [info exists flags(-sort)] } {
+    sta_warn 1338 "The -sort flag is ignored."
+  }
   set remove_cells {}
   if { [info exists keys(-remove_cells)] } {
     set remove_cells [parse_cell_arg $keys(-remove_cells)]
   }
-  set sort [info exists flags(-sort)]
   set include_pwr_gnd [info exists flags(-include_pwr_gnd)]
   check_argc_eq1 "write_verilog" $args
   set filename [file nativename [lindex $args 0]]
-  write_verilog_cmd $filename $sort $include_pwr_gnd $remove_cells
+  write_verilog_cmd $filename $include_pwr_gnd $remove_cells
 }
 
 # sta namespace end

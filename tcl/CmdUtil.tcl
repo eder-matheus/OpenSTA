@@ -1,5 +1,5 @@
 # OpenSTA, Static Timing Analyzer
-# Copyright (c) 2025, Parallax Software, Inc.
+# Copyright (c) 2026, Parallax Software, Inc.
 # 
 # This program is free software: you can redistribute it and/or modify
 # it under the terms of the GNU General Public License as published by
@@ -65,15 +65,15 @@ proc show_cmd_args { cmd } {
   # Break the arglist up into max_col length lines.
   while {1} {
     if {[regexp {(^[\n ]*)([a-zA-Z0-9_\\\|\-]+|\[[^\[]+\])(.*)} \
-	   $arglist ignore space arg rest]} {
+           $arglist ignore space arg rest]} {
       set arg_length [string length $arg]
       if { $col + $arg_length < $max_col } {
-	set line "$line $arg"
-	set col [expr $col + $arg_length + 1]
+        set line "$line $arg"
+        set col [expr $col + $arg_length + 1]
       } else {
         report_line $line
-	set line "$indent_str $arg"
-	set col [expr $indent + $arg_length + 1]
+        set line "$indent_str $arg"
+        set col [expr $indent + $arg_length + 1]
       }
       set arglist $rest
     } else {
@@ -122,7 +122,7 @@ define_cmd_args "report_units" {}
 proc report_units { args } {
   check_argc_eq0 "report_units" $args
   foreach unit {"time" "capacitance" "resistance" "voltage" "current" "power" "distance"} {
-    report_line " $unit 1[unit_scaled_suffix $unit]"
+    report_line " $unit [unit_scale_suffix $unit]"
   }
 }
 
@@ -130,9 +130,9 @@ proc write_units_json { jsonfile } {
   set f [open $jsonfile w]
   puts $f "{"
   foreach unit {"time" "capacitance" "resistance" "voltage" "current" "power"} {
-    puts $f "  \"$unit\": \"[unit_scaled_suffix $unit]\","
+    puts $f "  \"$unit\": \"[unit_scale_suffix $unit]\","
   }
-  puts $f "  \"distance\": \"[unit_scaled_suffix distance]\""
+  puts $f "  \"distance\": \"[unit_scale_suffix distance]\""
   puts $f "}"
   close $f
 }
@@ -147,7 +147,7 @@ define_cmd_args "set_cmd_units" \
 proc set_cmd_units { args } {
   parse_key_args "set_cmd_units" args \
     keys {-capacitance -resistance -time -voltage -current -power \
-	    -distance -digits -suffix} \
+            -distance -digits -suffix} \
     flags {}
 
   check_argc_eq0 "set_cmd_units" $args
@@ -167,13 +167,13 @@ proc set_unit_values { unit key suffix key_var } {
     set arg_suffix [string range $value end-[expr $suffix_length - 1] end]
     if { [string match -nocase $arg_suffix $suffix] } {
       set arg_prefix [string range $value 0 end-$suffix_length]
-      if { [regexp "^(10*)?(\[Mkmunpf\])?$" $arg_prefix ignore mult prefix] } {
+      if { [regexp "^(10*\\\.?0*)?(\[Mkmunpf\])?$" $arg_prefix ignore mult prefix] } {
         #puts "$arg_prefix '$mult' '$prefix'"
         if { $mult == "" } {
           set mult 1
         }
         set scale [unit_prefix_scale $unit $prefix ]
-        set_cmd_unit_scale $unit $scale
+        set_cmd_unit_scale $unit [expr $scale * $mult]
       } else {
         sta_error 166 "unknown unit $unit prefix '${arg_prefix}'."
       }
@@ -191,53 +191,55 @@ proc set_unit_values { unit key suffix key_var } {
 
 ################################################################
 
-define_cmd_args "delete_from_list" {list objs}
+define_cmd_args "delete_from_list" {list delete}
 
-proc delete_from_list { list objects } {
-  delete_objects_from_list_cmd $list $objects
+proc delete_from_list { list delete } {
+  delete_objects_from_list_cmd $list $delete
 }
 
-proc delete_objects_from_list_cmd { list objects } {
-  set list0 [lindex $list 0]
-  set list_is_object [is_object $list0]
-  set list_type [object_type $list0]
-  foreach obj $objects {
-    # If the list is a collection of tcl objects (returned by get_*),
-    # convert the obj to be removed from a name to an object of the same
-    # type.
-    if {$list_is_object && ![is_object $obj]} {
-      if {$list_type == "Clock"} {
-	set obj [find_clock $obj]
-      } elseif {$list_type == "Port"} {
-	set top_instance [top_instance]
-	set top_cell [$top_instance cell]
-	set obj [$top_cell find_port $obj]
-      } elseif {$list_type == "Pin"} {
-	set obj [find_pin $obj]
-      } elseif {$list_type == "Instance"} {
-	set obj [find_instance $obj]
-      } elseif {$list_type == "Net"} {
-	set obj [find_net $obj]
-      } elseif {$list_type == "LibertyLibrary"} {
-	set obj [find_liberty $obj]
-      } elseif {$list_type == "LibertyCell"} {
-	set obj [find_liberty_cell $obj]
-      } elseif {$list_type == "LibertyPort"} {
-	set obj [get_lib_pins $obj]
-      } else {
-	sta_error 164 "unsupported object type $list_type."
+proc delete_objects_from_list_cmd { list delete } {
+  if { $list != {} } {
+    set list0 [lindex $list 0]
+    set list_is_objects [is_object $list0]
+    foreach obj $delete {
+      # If the list is a collection of tcl objects (returned by get_*),
+      # convert the obj to be removed from a name to an object of the same
+      # type.
+      if {$list_is_objects && ![is_object $obj]} {
+        set list_type [object_type $list0]
+        if {$list_type == "Clock"} {
+          set obj [find_clock $obj]
+        } elseif {$list_type == "Port"} {
+          set top_instance [top_instance]
+          set top_cell [$top_instance cell]
+          set obj [$top_cell find_port $obj]
+        } elseif {$list_type == "Pin"} {
+          set obj [find_pin $obj]
+        } elseif {$list_type == "Instance"} {
+          set obj [find_instance $obj]
+        } elseif {$list_type == "Net"} {
+          set obj [find_net $obj]
+        } elseif {$list_type == "LibertyLibrary"} {
+          set obj [find_liberty $obj]
+        } elseif {$list_type == "LibertyCell"} {
+          set obj [find_liberty_cell $obj]
+        } elseif {$list_type == "LibertyPort"} {
+          set obj [get_lib_pins $obj]
+        } else {
+          sta_error 164 "unsupported object type $list_type."
+        }
       }
-    }
-    set index [lsearch $list $obj]
-    if { $index != -1 } {
-      set list [lreplace $list $index $index]
+      set index [lsearch $list $obj]
+      if { $index != -1 } {
+        set list [lreplace $list $index $index]
+      }
     }
   }
   return $list
 }
-
+  
 ################################################################
-
+  
 proc set_cmd_namespace { namespc } {
   if { $namespc == "sdc" || $namespc == "sta" } {
     set_cmd_namespace_cmd $namespc
@@ -245,7 +247,7 @@ proc set_cmd_namespace { namespc } {
     sta_error 165 "unknown namespace $namespc."
   }
 }
-
+  
 ################################################################
 
 define_cmd_args "report_object_full_names" {objects}
@@ -295,32 +297,5 @@ proc full_name_cmp { obj1 obj2 } {
   return [string compare [get_full_name $obj1] [get_full_name $obj2]]
 }
 
-proc get_object_type { obj } {
-  set object_type [object_type $obj]
-  if { $object_type == "Clock" } {
-    return "clock"
-  } elseif { $object_type == "LibertyCell" } {
-    return "lib_cell"
-  } elseif { $object_type == "LibertyPort" } {
-    return "lib_pin"
-  } elseif { $object_type == "Cell" } {
-    return "cell"
-  } elseif { $object_type == "Instance" } {
-    return "instance"
-  } elseif { $object_type == "Port" } {
-    return "port"
-  } elseif { $object_type == "Pin" } {
-    return "pin"
-  } elseif { $object_type == "Net" } {
-    return "net"
-  } elseif { $object_type == "Edge" } {
-    return "timing_arc"
-  } elseif { $object_type == "TimingArcSet" } {
-    return "timing_arc"
-  } else {
-    return "?"
-  }
-}
-
-# sta namespace end.
+# namespace sta
 }

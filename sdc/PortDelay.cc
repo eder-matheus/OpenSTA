@@ -1,5 +1,5 @@
 // OpenSTA, Static Timing Analyzer
-// Copyright (c) 2025, Parallax Software, Inc.
+// Copyright (c) 2026, Parallax Software, Inc.
 // 
 // This program is free software: you can redistribute it and/or modify
 // it under the terms of the GNU General Public License as published by
@@ -24,20 +24,16 @@
 
 #include "PortDelay.hh"
 
-#include "Sdc.hh"
 #include "Network.hh"
+#include "Sdc.hh"
 
 namespace sta {
 
 PortDelay::PortDelay(const Pin *pin,
-		     const ClockEdge *clk_edge,
+                     const ClockEdge *clk_edge,
                      const Network *network) :
   pin_(pin),
   clk_edge_(clk_edge),
-  source_latency_included_(false),
-  network_latency_included_(false),
-  ref_pin_(nullptr),
-  delays_(),
   leaf_pins_(network)
 {
 }
@@ -91,19 +87,29 @@ PortDelay::refTransition() const
     return RiseFall::rise();
 }
 
+void
+PortDelay::setRefPinEdgesExist(bool exists)
+{
+  ref_pin_edges_exist_ = exists;
+}
+
+////////////////////////////////////////////////////////////////
+
 InputDelay::InputDelay(const Pin *pin,
-		       const ClockEdge *clk_edge,
-		       int index,
-		       const Network *network) :
+                       const ClockEdge *clk_edge,
+                       int index,
+                       const Network *network) :
   PortDelay(pin, clk_edge, network),
   index_(index)
 {
   findLeafLoadPins(pin, network, &leaf_pins_);
 }
 
+////////////////////////////////////////////////////////////////
+
 OutputDelay::OutputDelay(const Pin *pin,
-			 const ClockEdge *clk_edge,
-			 const Network *network) :
+                         const ClockEdge *clk_edge,
+                         const Network *network) :
   PortDelay(pin, clk_edge, network)
 {
   if (network)
@@ -132,4 +138,4 @@ PortDelayLess::operator() (const PortDelay *delay1,
     return clkEdgeLess(delay1->clkEdge(), delay2->clkEdge());
 }
 
-} // namespace
+} // namespace sta

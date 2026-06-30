@@ -1,5 +1,5 @@
 // OpenSTA, Static Timing Analyzer
-// Copyright (c) 2025, Parallax Software, Inc.
+// Copyright (c) 2026, Parallax Software, Inc.
 // 
 // This program is free software: you can redistribute it and/or modify
 // it under the terms of the GNU General Public License as published by
@@ -24,32 +24,32 @@
 
 #include "VerilogWriter.hh"
 
-#include <cstdlib>
 #include <algorithm>
+#include <cstdlib>
+#include <map>
+#include <string>
+#include <string_view>
 
 #include "Error.hh"
+#include "Format.hh"
 #include "Liberty.hh"
-#include "PortDirection.hh"
+#include "Zlib.hh"
 #include "Network.hh"
 #include "NetworkCmp.hh"
-#include "VerilogNamespace.hh"
 #include "ParseBus.hh"
+#include "PortDirection.hh"
+#include "VerilogNamespace.hh"
 
 namespace sta {
-
-using std::min;
-using std::max;
-using std::string;
 
 class VerilogWriter
 {
 public:
   VerilogWriter(const char *filename,
-		bool sort,
-		bool include_pwr_gnd,
-		CellSeq *remove_cells,
-		FILE *stream,
-		Network *network);
+                bool include_pwr_gnd,
+                CellSeq *remove_cells,
+                gzFile stream,
+                Network *network);
   void writeModules();
 
 protected:
@@ -65,14 +65,14 @@ protected:
   void writeChildren(const Instance *inst);
   void writeChild(const Instance *child);
   void writeInstPin(const Instance *inst,
-		    const Port *port,
-		    bool &first_port);
+                    const Port *port,
+                    bool &first_port);
   void writeInstBusPin(const Instance *inst,
-		       const Port *port,
-		       bool &first_port);
+                       const Port *port,
+                       bool &first_port);
   void writeInstBusPinBit(const Instance *inst,
-			  const Port *port,
-			  bool &first_member);
+                          const Port *port,
+                          bool &first_member);
   void writeAssigns(const Instance *inst);
 
   int findUnconnectedNetCount(const Instance *inst);
@@ -81,28 +81,27 @@ protected:
                       const Port *port);
 
   const char *filename_;
-  bool sort_;
   bool include_pwr_gnd_;
   CellSet remove_cells_;
-  FILE *stream_;
+  gzFile stream_;
   Network *network_;
-  int unconnected_net_index_;
+  int unconnected_net_index_{1};
 };
 
 void
 writeVerilog(const char *filename,
-	     bool sort,
-	     bool include_pwr_gnd,
-	     CellSeq *remove_cells,
-	     Network *network)
+             bool include_pwr_gnd,
+             CellSeq *remove_cells,
+             Network *network)
 {
   if (network->topInstance()) {
-    FILE *stream = fopen(filename, "w");
+    bool gzip = std::string_view(filename).ends_with(".gz");
+    gzFile stream = gzopen(filename, gzip ? "wb" : "wT");
     if (stream) {
-      VerilogWriter writer(filename, sort, include_pwr_gnd,
-			   remove_cells, stream, network);
+      VerilogWriter writer(filename, include_pwr_gnd,
+                           remove_cells, stream, network);
       writer.writeModules();
-      fclose(stream);
+      gzclose(stream);
     }
     else
       throw FileNotWritable(filename);
@@ -110,18 +109,15 @@ writeVerilog(const char *filename,
 }
 
 VerilogWriter::VerilogWriter(const char *filename,
-			     bool sort,
-			     bool include_pwr_gnd,
-			     CellSeq *remove_cells,
-			     FILE *stream,
-			     Network *network) :
+                             bool include_pwr_gnd,
+                             CellSeq *remove_cells,
+                             gzFile stream,
+                             Network *network) :
   filename_(filename),
-  sort_(sort),
   include_pwr_gnd_(include_pwr_gnd),
   remove_cells_(network),
   stream_(stream),
-  network_(network),
-  unconnected_net_index_(1)
+  network_(network)
 {
   if (remove_cells) {
     for(Cell *lib_cell : *remove_cells)
@@ -146,13 +142,12 @@ VerilogWriter::findHierChildren()
   CellSet cells(network_);
   findHierChildren(network_->topInstance(), children, cells);
 
-  if (sort_)
-    sort(children, [this](const Instance *inst1,
-                          const Instance *inst2) {
-      const char *cell_name1 = network_->cellName(inst1);
-      const char *cell_name2 = network_->cellName(inst2);
-      return stringLess(cell_name1, cell_name2);
-    });
+  sort(children, [this](const Instance *inst1,
+                        const Instance *inst2) {
+    std::string cell_name1 = network_->cellName(inst1);
+    std::string cell_name2 = network_->cellName(inst2);
+    return cell_name1 < cell_name2;
+  });
 
   return children;
 }
@@ -167,7 +162,7 @@ VerilogWriter::findHierChildren(const Instance *inst,
     const Instance *child = child_iter->next();
     const Cell *cell = network_->cell(child);
     if (network_->isHierarchical(child)
-        && !cells.hasKey(cell)) {
+        && !cells.contains(cell)) {
       children.push_back(child);
       cells.insert(cell);
       findHierChildren(child, children, cells);
@@ -180,16 +175,16 @@ void
 VerilogWriter::writeModule(const Instance *inst)
 {
   Cell *cell = network_->cell(inst);
-  std::string cell_vname = cellVerilogName(network_->name(cell));
-  fprintf(stream_, "module %s (", cell_vname.c_str());
+  std::string cell_vname = cellVerilogName(std::string(network_->name(cell)));
+  sta::print(stream_, "module {} (", cell_vname);
   writePorts(cell);
   writePortDcls(cell);
-  fprintf(stream_, "\n");
+  sta::print(stream_, "\n");
   writeWireDcls(inst);
-  fprintf(stream_, "\n");
+  sta::print(stream_, "\n");
   writeChildren(inst);
   writeAssigns(inst);
-  fprintf(stream_, "endmodule\n");
+  sta::print(stream_, "endmodule\n");
 }
 
 void
@@ -202,14 +197,14 @@ VerilogWriter::writePorts(const Cell *cell)
     if (include_pwr_gnd_
         || !network_->direction(port)->isPowerGround()) {
       if (!first)
-        fprintf(stream_, ",\n    ");
-      std::string verilog_name = portVerilogName(network_->name(port));
-      fprintf(stream_, "%s", verilog_name.c_str());
+        sta::print(stream_, ",\n    ");
+      std::string verilog_name = portVerilogName(std::string(network_->name(port)));
+      sta::print(stream_, "{}", verilog_name);
       first = false;
     }
   }
   delete port_iter;
-  fprintf(stream_, ");\n");
+  sta::print(stream_, ");\n");
 }
 
 void
@@ -221,22 +216,22 @@ VerilogWriter::writePortDcls(const Cell *cell)
     PortDirection *dir = network_->direction(port);
     if (include_pwr_gnd_
         || !network_->direction(port)->isPowerGround()) {
-      std::string port_vname = portVerilogName(network_->name(port));
+      std::string port_vname = portVerilogName(std::string(network_->name(port)));
       const char *vtype = verilogPortDir(dir);
       if (vtype) {
-        fprintf(stream_, " %s", vtype);
+        sta::print(stream_, " {}", vtype);
         if (network_->isBus(port))
-          fprintf(stream_, " [%d:%d]",
-                  network_->fromIndex(port),
-                  network_->toIndex(port));
-        fprintf(stream_, " %s;\n", port_vname.c_str());
-        if (dir->isTristate()) {
-          fprintf(stream_, " tri");
-          if (network_->isBus(port))
-            fprintf(stream_, " [%d:%d]",
+          sta::print(stream_, " [{}:{}]",
                     network_->fromIndex(port),
                     network_->toIndex(port));
-          fprintf(stream_, " %s;\n", port_vname.c_str());
+        sta::print(stream_, " {};\n", port_vname);
+        if (dir->isTristate()) {
+          sta::print(stream_, " tri");
+          if (network_->isBus(port))
+            sta::print(stream_, " [{}:{}]",
+                      network_->fromIndex(port),
+                      network_->toIndex(port));
+          sta::print(stream_, " {};\n", port_vname);
         }
       }
     }
@@ -259,6 +254,8 @@ VerilogWriter::verilogPortDir(PortDirection *dir)
     return "inout";
   else if (dir == PortDirection::ground())
     return "inout";
+  else if (dir == PortDirection::well())
+    return "inout";
   else if (dir == PortDirection::internal()
            || dir == PortDirection::unknown())
     return "inout";
@@ -268,20 +265,20 @@ VerilogWriter::verilogPortDir(PortDirection *dir)
   }
 }
 
-typedef std::pair<int, int> BusIndexRange;
+using BusIndexRange = std::pair<int, int>;
 
 void
 VerilogWriter::writeWireDcls(const Instance *inst)
 {
   Cell *cell = network_->cell(inst);
   char escape = network_->pathEscape();
-  Map<std::string, BusIndexRange, std::less<std::string>> bus_ranges;
+  std::map<std::string, BusIndexRange, std::less<std::string>> bus_ranges;
   NetIterator *net_iter = network_->netIterator(inst);
   while (net_iter->hasNext()) {
     Net *net = net_iter->next();
     if (include_pwr_gnd_
         || !(network_->isPower(net) || network_->isGround(net))) {
-      const char *net_name = network_->name(net);
+      std::string net_name = network_->name(net);
       if (network_->findPort(cell, net_name) == nullptr) {
         if (isBusName(net_name, '[', ']', escape)) {
           bool is_bus;
@@ -289,37 +286,36 @@ VerilogWriter::writeWireDcls(const Instance *inst)
           int index;
           parseBusName(net_name, '[', ']', escape, is_bus, bus_name, index);
           BusIndexRange &range = bus_ranges[bus_name];
-          range.first = max(range.first, index);
-          range.second = min(range.second, index);
+          range.first = std::max(range.first, index);
+          range.second = std::min(range.second, index);
         }
         else {
-          std::string net_vname = netVerilogName(net_name);
-          fprintf(stream_, " wire %s;\n", net_vname.c_str());;
+          std::string net_vname = netVerilogName(std::string(net_name));
+          sta::print(stream_, " wire {};\n", net_vname);
         }
       }
     }
   }
   delete net_iter;
 
-  for (const auto& [bus_name1, range] : bus_ranges) {
-    const char *bus_name = bus_name1.c_str();
+  for (const auto& [bus_name, range] : bus_ranges) {
     std::string net_vname = netVerilogName(bus_name);
-    fprintf(stream_, " wire [%d:%d] %s;\n",
-            range.first,
-            range.second,
-            net_vname.c_str());;
+    sta::print(stream_, " wire [{}:{}] {};\n",
+               range.first,
+               range.second,
+               net_vname);
   }
 
   // Wire net dcls for writeInstBusPinBit.
   int nc_count = findUnconnectedNetCount(inst);
   for (int i = 1; i < nc_count + 1; i++)
-    fprintf(stream_, " wire _NC%d;\n", i);
+    sta::print(stream_, " wire _NC{};\n", i);
 }
 
 void
 VerilogWriter::writeChildren(const Instance *inst)
 {
-  Vector<Instance*> children;
+  std::vector<Instance*> children;
   InstanceChildIterator *child_iter = network_->childIterator(inst);
   while (child_iter->hasNext()) {
     Instance *child = child_iter->next();
@@ -327,11 +323,10 @@ VerilogWriter::writeChildren(const Instance *inst)
   }
   delete child_iter;
 
-  if (sort_)
-    sort(children, [this](const Instance *inst1,
-                          const Instance *inst2) {
-      return stringLess(network_->name(inst1), network_->name(inst2));
-    });
+  sort(children, [this](const Instance *inst1,
+                        const Instance *inst2) {
+    return network_->name(inst1) < network_->name(inst2);
+  });
 
   for (auto child : children)
     writeChild(child);
@@ -341,47 +336,47 @@ void
 VerilogWriter::writeChild(const Instance *child)
 {
   Cell *child_cell = network_->cell(child);
-  if (!remove_cells_.hasKey(child_cell)) {
-    const char *child_name = network_->name(child);
-    string child_vname = instanceVerilogName(child_name);
-    string child_cell_vname = cellVerilogName(network_->name(child_cell));
-    fprintf(stream_, " %s %s (",
-	    child_cell_vname.c_str(),
-	    child_vname.c_str());
+  if (!remove_cells_.contains(child_cell)) {
+    std::string child_name = network_->name(child);
+    std::string child_vname = instanceVerilogName(std::string(child_name));
+    std::string child_cell_vname = cellVerilogName(std::string(network_->name(child_cell)));
+    sta::print(stream_, " {} {} (",
+               child_cell_vname,
+               child_vname);
     bool first_port = true;
     CellPortIterator *port_iter = network_->portIterator(child_cell);
     while (port_iter->hasNext()) {
       Port *port = port_iter->next();
       if (include_pwr_gnd_
-	  || !network_->direction(port)->isPowerGround()) {
-	if (network_->hasMembers(port))
-	  writeInstBusPin(child, port, first_port);
-	else
-	  writeInstPin(child, port, first_port);
+          || !network_->direction(port)->isPowerGround()) {
+        if (network_->hasMembers(port))
+          writeInstBusPin(child, port, first_port);
+        else
+          writeInstPin(child, port, first_port);
       }
     }
     delete port_iter;
-    fprintf(stream_, ");\n");
+    sta::print(stream_, ");\n");
   }
 }
 
 void
 VerilogWriter::writeInstPin(const Instance *inst,
-			    const Port *port,
-			    bool &first_port)
+                            const Port *port,
+                            bool &first_port)
 {
   Pin *pin = network_->findPin(inst, port);
   if (pin) {
     Net *net = network_->net(pin);
     if (net) {
-      const char *net_name = network_->name(net);
-      string net_vname = netVerilogName(net_name);
+      std::string net_name = network_->name(net);
+      std::string net_vname = netVerilogName(std::string(net_name));
       if (!first_port)
-	fprintf(stream_, ",\n    ");
-      string port_vname = portVerilogName(network_->name(port));
-      fprintf(stream_, ".%s(%s)",
-	      port_vname.c_str(),
-	      net_vname.c_str());
+        sta::print(stream_, ",\n    ");
+      std::string port_vname = portVerilogName(std::string(network_->name(port)));
+      sta::print(stream_, ".{}({})",
+                 port_vname,
+                 net_vname);
       first_port = false;
     }
   }
@@ -389,13 +384,14 @@ VerilogWriter::writeInstPin(const Instance *inst,
 
 void
 VerilogWriter::writeInstBusPin(const Instance *inst,
-			       const Port *port,
-			       bool &first_port)
+                               const Port *port,
+                               bool &first_port)
 {
   if (!first_port)
-    fprintf(stream_, ",\n    ");
+    sta::print(stream_, ",\n    ");
 
-  fprintf(stream_, ".%s({", network_->name(port));
+  std::string port_vname = portVerilogName(std::string(network_->name(port)));
+  sta::print(stream_, ".{}({{", port_vname);
   first_port = false;
   bool first_member = true;
 
@@ -418,26 +414,25 @@ VerilogWriter::writeInstBusPin(const Instance *inst,
     }
     delete member_iter;
   }
-  fprintf(stream_, "})");
+  sta::print(stream_, "}})");
 }
 
 void
 VerilogWriter::writeInstBusPinBit(const Instance *inst,
-				  const Port *port,
-				  bool &first_member)
+                                  const Port *port,
+                                  bool &first_member)
 {
   Pin *pin = network_->findPin(inst, port);
   Net *net = pin ? network_->net(pin) : nullptr;
-  string net_name;
-  if (net)
-    net_name = network_->name(net);
-  else
+  std::string net_name = net
+    ? std::string(network_->name(net))
     // There is no verilog syntax to "skip" a bit in the concatentation.
-    stringPrint(net_name, "_NC%d", unconnected_net_index_++);
-  string net_vname = netVerilogName(net_name.c_str());
+    : sta::format("_NC{}", unconnected_net_index_++);
+
+  std::string net_vname = netVerilogName(net_name);
   if (!first_member)
-    fprintf(stream_, ",\n    ");
-  fprintf(stream_, "%s", net_vname.c_str());
+    sta::print(stream_, ",\n    ");
+  sta::print(stream_, "{}", net_vname);
   first_member = false;
 }
 
@@ -454,18 +449,19 @@ VerilogWriter::writeAssigns(const Instance *inst)
     if (term) {
       Net *net = network_->net(term);
       Port *port = network_->port(pin);
-      if (port
+      if (net
+          && port
           && (include_pwr_gnd_
               || !(network_->isPower(net) || network_->isGround(net)))
           && (network_->direction(port)->isAnyOutput()
               || (include_pwr_gnd_ && network_->direction(port)->isPowerGround()))
-          && !stringEqual(network_->name(port), network_->name(net))) {
+          && network_->name(port) != network_->name(net)) {
         // Port name is different from net name.
-        string port_vname = netVerilogName(network_->name(port));
-        string net_vname = netVerilogName(network_->name(net));
-        fprintf(stream_, " assign %s = %s;\n",
-                port_vname.c_str(),
-                net_vname.c_str());
+        std::string port_vname = netVerilogName(std::string(network_->name(port)));
+        std::string net_vname = netVerilogName(std::string(network_->name(net)));
+        sta::print(stream_, " assign {} = {};\n",
+                   port_vname,
+                   net_vname);
       }
     }
   }
@@ -492,7 +488,7 @@ VerilogWriter::findChildNCcount(const Instance *child)
 {
   int nc_count = 0;
   Cell *child_cell = network_->cell(child);
-  if (!remove_cells_.hasKey(child_cell)) {
+  if (!remove_cells_.contains(child_cell)) {
     CellPortIterator *port_iter = network_->portIterator(child_cell);
     while (port_iter->hasNext()) {
       Port *port = port_iter->next();
@@ -521,4 +517,4 @@ VerilogWriter::findPortNCcount(const Instance *inst,
   return nc_count;
 }
 
-} // namespace
+} // namespace sta

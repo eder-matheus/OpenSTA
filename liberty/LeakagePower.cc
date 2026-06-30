@@ -1,5 +1,5 @@
 // OpenSTA, Static Timing Analyzer
-// Copyright (c) 2025, Parallax Software, Inc.
+// Copyright (c) 2026, Parallax Software, Inc.
 // 
 // This program is free software: you can redistribute it and/or modify
 // it under the terms of the GNU General Public License as published by
@@ -25,44 +25,33 @@
 #include "LeakagePower.hh"
 
 #include "FuncExpr.hh"
-#include "TableModel.hh"
 #include "Liberty.hh"
 
 namespace sta {
 
-LeakagePowerAttrs::LeakagePowerAttrs() :
-  when_(nullptr),
-  power_(0.0)
-{
-}
-
-void
-LeakagePowerAttrs::setWhen(FuncExpr *when)
-{
-  when_ = when;
-}
-
-void
-LeakagePowerAttrs::setPower(float power)
-{
-  power_ = power;
-}
-
-////////////////////////////////////////////////////////////////
-
 LeakagePower::LeakagePower(LibertyCell *cell,
-			   LeakagePowerAttrs *attrs) :
+                           LibertyPort *related_pg_port,
+                           FuncExpr *when,
+                           float power) :
   cell_(cell),
-  when_(attrs->when()),
-  power_(attrs->power())
+  related_pg_port_(related_pg_port),
+  when_(when),
+  power_(power)
 {
-  cell->addLeakagePower(this);
+}
+
+LeakagePower::LeakagePower(LeakagePower &&other) noexcept
+{
+  cell_ = other.cell_;
+  related_pg_port_ = other.related_pg_port_;
+  when_ = other.when_;
+  other.when_ = nullptr;
+  power_ = other.power_;
 }
 
 LeakagePower::~LeakagePower()
 {
-  if (when_)
-    when_->deleteSubexprs();
+  delete when_;
 }
 
-} // namespace
+} // namespace sta

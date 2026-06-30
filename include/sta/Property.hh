@@ -1,5 +1,5 @@
 // OpenSTA, Static Timing Analyzer
-// Copyright (c) 2025, Parallax Software, Inc.
+// Copyright (c) 2026, Parallax Software, Inc.
 // 
 // This program is free software: you can redistribute it and/or modify
 // it under the terms of the GNU General Public License as published by
@@ -24,15 +24,16 @@
 
 #pragma once
 
+#include <functional>
 #include <map>
 #include <string>
-#include <functional>
+#include <string_view>
 
 #include "LibertyClass.hh"
 #include "NetworkClass.hh"
-#include "SearchClass.hh"
-#include "SdcClass.hh"
 #include "PowerClass.hh"
+#include "SdcClass.hh"
+#include "SearchClass.hh"
 
 namespace sta {
 
@@ -41,108 +42,105 @@ class PropertyValue;
 
 class Sta;
 class PropertyValue;
+class Scene;
+class Mode;
 
 template<class TYPE>
 class PropertyRegistry
 {
 public:
-  typedef std::function<PropertyValue (TYPE object, Sta *sta)> PropertyHandler;
-  void defineProperty(const std::string &property,
+  using PropertyHandler = std::function<PropertyValue (TYPE object, Sta *sta)>;
+  void defineProperty(std::string_view property,
                       PropertyHandler handler);
   PropertyValue getProperty(TYPE object,
-                            const std::string &property,
-                            const char *type_name,
+                            std::string_view property,
+                            std::string_view type_name,
                             Sta *sta);
 
 private:
-  std::map<std::string, PropertyHandler> registry_;
+  std::map<std::string, PropertyHandler, std::less<>> registry_;
 };
 
 class Properties
 {
 public:
   Properties(Sta *sta);
-  virtual ~Properties() {}
 
   PropertyValue getProperty(const Library *lib,
-                            const std::string property);
+                            std::string_view property);
   PropertyValue getProperty(const LibertyLibrary *lib,
-                            const std::string property);
+                            std::string_view property);
   PropertyValue getProperty(const Cell *cell,
-                            const std::string property);
+                            std::string_view property);
   PropertyValue getProperty(const LibertyCell *cell,
-                            const std::string property);
+                            std::string_view property);
   PropertyValue getProperty(const Port *port,
-                            const std::string property);
+                            std::string_view property);
   PropertyValue getProperty(const LibertyPort *port,
-                            const std::string property);
+                            std::string_view property);
   PropertyValue getProperty(const Instance *inst,
-                            const std::string property);
+                            std::string_view property);
   PropertyValue getProperty(const Pin *pin,
-                            const std::string property);
+                            std::string_view property);
   PropertyValue getProperty(const Net *net,
-                            const std::string property);
+                            std::string_view property);
   PropertyValue getProperty(Edge *edge,
-                            const std::string property);
+                            std::string_view property);
   PropertyValue getProperty(const Clock *clk,
-                            const std::string property);
+                            std::string_view property);
+  PropertyValue getProperty(const Scene *scene,
+                            std::string_view property);
+  PropertyValue getProperty(const Mode *mode,
+                            std::string_view property);
   PropertyValue getProperty(PathEnd *end,
-                            const std::string property);
+                            std::string_view property);
   PropertyValue getProperty(Path *path,
-                            const std::string property);
+                            std::string_view property);
   PropertyValue getProperty(TimingArcSet *arc_set,
-                            const std::string property);
+                            std::string_view property);
 
   // Define handler for external property.
   // properties->defineProperty("foo",
   //                            [] (const Instance *, Sta *) -> PropertyValue {
   //                              return PropertyValue("bar");
   //                            });
-  void defineProperty(std::string &property,
-                      PropertyRegistry<const Library *>::PropertyHandler handler);
-  void defineProperty(std::string &property,
-                      PropertyRegistry<const LibertyLibrary *>::PropertyHandler handler);
-  void defineProperty(std::string &property,
-                      PropertyRegistry<const Cell *>::PropertyHandler handler);
-  void defineProperty(std::string &property,
-                      PropertyRegistry<const LibertyCell *>::PropertyHandler handler);
-  void defineProperty(std::string &property,
-                      PropertyRegistry<const Port *>::PropertyHandler handler);
-  void defineProperty(std::string &property,
-                      PropertyRegistry<const LibertyPort *>::PropertyHandler handler);
-  void defineProperty(std::string &property,
-                      PropertyRegistry<const Instance *>::PropertyHandler handler);
-  void defineProperty(std::string &property,
-                      PropertyRegistry<const Pin *>::PropertyHandler handler);
-  void defineProperty(std::string &property,
-                      PropertyRegistry<const Net *>::PropertyHandler handler);
-  void defineProperty(std::string &property,
-                      PropertyRegistry<const Clock *>::PropertyHandler handler);
+  void defineProperty(std::string_view property,
+                      const PropertyRegistry<const Library *>::PropertyHandler &handler);
+  void defineProperty(std::string_view property,
+                      const PropertyRegistry<const LibertyLibrary *>::PropertyHandler &handler);
+  void defineProperty(std::string_view property,
+                      const PropertyRegistry<const Cell *>::PropertyHandler &handler);
+  void defineProperty(std::string_view property,
+                      const PropertyRegistry<const LibertyCell *>::PropertyHandler &handler);
+  void defineProperty(std::string_view property,
+                      const PropertyRegistry<const Port *>::PropertyHandler &handler);
+  void defineProperty(std::string_view property,
+                      const PropertyRegistry<const LibertyPort *>::PropertyHandler &handler);
+  void defineProperty(std::string_view property,
+                      const PropertyRegistry<const Instance *>::PropertyHandler &handler);
+  void defineProperty(std::string_view property,
+                      const PropertyRegistry<const Pin *>::PropertyHandler &handler);
+  void defineProperty(std::string_view property,
+                      const PropertyRegistry<const Net *>::PropertyHandler &handler);
+  void defineProperty(std::string_view property,
+                      const PropertyRegistry<const Clock *>::PropertyHandler &handler);
 
 protected:
   PropertyValue portSlew(const Port *port,
-                         const MinMax *min_max);
-  PropertyValue portSlew(const Port *port,
-                         const RiseFall *rf,
+                         const RiseFallBoth *rf,
                          const MinMax *min_max);
   PropertyValue portSlack(const Port *port,
-                          const MinMax *min_max);
-  PropertyValue portSlack(const Port *port,
-                          const RiseFall *rf,
+                          const RiseFallBoth *rf,
                           const MinMax *min_max);
   PropertyValue pinArrival(const Pin *pin,
-                           const RiseFall *rf,
+                           const RiseFallBoth *rf,
                            const MinMax *min_max);
 
   PropertyValue pinSlack(const Pin *pin,
-                         const MinMax *min_max);
-  PropertyValue pinSlack(const Pin *pin,
-                         const RiseFall *rf,
+                         const RiseFallBoth *rf,
                          const MinMax *min_max);
   PropertyValue pinSlew(const Pin *pin,
-                        const MinMax *min_max);
-  PropertyValue pinSlew(const Pin *pin,
-                        const RiseFall *rf,
+                        const RiseFallBoth *rf,
                         const MinMax *min_max);
 
   PropertyValue delayPropertyValue(Delay delay);
@@ -167,7 +165,7 @@ protected:
 };
 
 // Adding a new property type
-//  value union
+//  value union (string values use std::string* so the union stays trivial)
 //  enum Type
 //  constructor
 //  copy constructor switch clause
@@ -179,17 +177,17 @@ protected:
 class PropertyValue
 {
 public:
-  enum Type { type_none, type_string, type_float, type_bool,
-	      type_library, type_cell, type_port,
-	      type_liberty_library, type_liberty_cell, type_liberty_port,
-	      type_instance, type_pin, type_pins, type_net,
-	      type_clk, type_clks, type_paths, type_pwr_activity };
+  enum class Type { none, string, float_, bool_,
+                    library, cell, port,
+                    liberty_library, liberty_cell, liberty_port,
+                    instance, pin, pins, net,
+                    clk, clks, paths, pwr_activity };
   PropertyValue();
-  PropertyValue(const char *value);
-  PropertyValue(std::string &value);
+  PropertyValue(std::string_view value);
+  PropertyValue(std::string value);
   PropertyValue(float value,
                 const Unit *unit);
-  explicit PropertyValue(bool value);
+  PropertyValue(bool value);
   PropertyValue(const Library *value);
   PropertyValue(const Cell *value);
   PropertyValue(const Port *value);
@@ -207,16 +205,14 @@ public:
   PropertyValue(ClockSet *value);
   PropertyValue(ConstPathSeq *value);
   PropertyValue(PwrActivity *value);
-  // Copy constructor.
-  PropertyValue(const PropertyValue &props);
-  // Move constructor.
-  PropertyValue(PropertyValue &&props);
+  PropertyValue(const PropertyValue &value);
+  PropertyValue(PropertyValue &&value) noexcept;
   ~PropertyValue();
   Type type() const { return type_; }
   const Unit *unit() const { return unit_; }
 
   std::string to_string(const Network *network) const;
-  const char *stringValue() const; // valid for type string
+  const std::string &stringValue() const; // valid for type string
   float floatValue() const;        // valid for type float
   bool boolValue() const;          // valid for type bool
   const LibertyLibrary *libertyLibrary() const { return liberty_library_; }
@@ -237,12 +233,15 @@ public:
   // Copy assignment.
   PropertyValue &operator=(const PropertyValue &);
   // Move assignment.
-  PropertyValue &operator=(PropertyValue &&);
+  PropertyValue &operator=(PropertyValue &&) noexcept;
 
 private:
+  void destroyActive();
+
   Type type_;
   union {
-    const char *string_;
+    // Use heap string to simplify initialization/destrucction.
+    std::string *string_;
     float float_;
     bool bool_;
     const Library *library_;
@@ -263,4 +262,4 @@ private:
   const Unit *unit_;
 };
 
-} // namespace
+} // namespace sta

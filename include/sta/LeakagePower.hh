@@ -1,5 +1,5 @@
 // OpenSTA, Static Timing Analyzer
-// Copyright (c) 2025, Parallax Software, Inc.
+// Copyright (c) 2026, Parallax Software, Inc.
 // 
 // This program is free software: you can redistribute it and/or modify
 // it under the terms of the GNU General Public License as published by
@@ -28,36 +28,26 @@
 
 namespace sta {
 
-class LeakagePowerAttrs;
-
-class LeakagePowerAttrs
-{
-public:
-  LeakagePowerAttrs();
-  FuncExpr *when() const { return when_; }
-  void setWhen(FuncExpr *when);
-  float power() { return power_; }
-  void setPower(float power);
-
-protected:
-  FuncExpr *when_;
-  float power_;
-};
-
 class LeakagePower
 {
 public:
+  LeakagePower();
   LeakagePower(LibertyCell *cell,
-	       LeakagePowerAttrs *attrs);
+               LibertyPort *related_pg_port,
+               FuncExpr *when,
+               float power);
+  LeakagePower(LeakagePower &&other) noexcept;
   ~LeakagePower();
   LibertyCell *libertyCell() const { return cell_; }
+  LibertyPort *relatedPgPort() const { return related_pg_port_; }
   FuncExpr *when() const { return when_; }
-  float power() { return power_; }
+  float power() const { return power_; }
 
 protected:
   LibertyCell *cell_;
+  LibertyPort *related_pg_port_;
   FuncExpr *when_;
   float power_;
 };
 
-} // namespace
+} // namespace sta

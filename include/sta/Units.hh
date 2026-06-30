@@ -1,5 +1,5 @@
 // OpenSTA, Static Timing Analyzer
-// Copyright (c) 2025, Parallax Software, Inc.
+// Copyright (c) 2026, Parallax Software, Inc.
 // 
 // This program is free software: you can redistribute it and/or modify
 // it under the terms of the GNU General Public License as published by
@@ -39,29 +39,33 @@ public:
   double staToUser(double value);
   // Convert from user interface units to sta units.
   double userToSta(double value);
-  void operator=(const Unit &unit);
+  Unit &operator=(const Unit &unit) = default;
   float scale() const { return scale_; }
   void setScale(float scale);
-  const char *scaleAbbreviation() const;
-  const char *suffix() const { return suffix_.c_str(); }
+  // Mkmunpf abbreviation for scale.
+  std::string scaleAbbreviation() const;
+  // 1Mkmunpf or scale
+  std::string scaleString() const;
+  std::string suffix() const { return suffix_; }
+  // scaleString + suffix
+  std::string scaleSuffix() const;
   // scale abbreviation + suffix
-  const char *scaledSuffix() const { return scaled_suffix_.c_str(); }
+  std::string scaleAbbrevSuffix() const { return scale_abbrev_suffix_; }
   void setSuffix(const char *suffix);
   int digits() const { return digits_; }
   void setDigits(int digits);
   // Does not include suffix.
   int width() const;
-  const char *asString(float value) const;
-  const char *asString(double value) const;
-  const char *asString(float value,
-		       int digits) const;
+  std::string asString(float value) const;
+  std::string asString(float value,
+                       int digits) const;
 
 private:
-  void setScaledSuffix();
+  void setScaleAbbrevSuffix();
 
   float scale_;			// multiplier from user units to internal units
   std::string suffix_;		// print suffix
-  std::string scaled_suffix_;
+  std::string scale_abbrev_suffix_;
   int digits_;			// print digits (after decimal pt)
 };
 
@@ -71,8 +75,8 @@ class Units
 {
 public:
   Units();
-  Unit *find(const char *unit_name);
-  void operator=(const Units &units);
+  Unit *find(std::string_view unit_name);
+  Units &operator=(const Units &units);
   Unit *timeUnit() { return &time_unit_; }
   const Unit *timeUnit() const { return &time_unit_; }
   Unit *capacitanceUnit() { return &capacitance_unit_; }
@@ -101,4 +105,4 @@ private:
   Unit scalar_unit_;
 };
 
-} // namespace
+} // namespace sta

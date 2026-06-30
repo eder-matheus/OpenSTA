@@ -1,5 +1,5 @@
 // OpenSTA, Static Timing Analyzer
-// Copyright (c) 2025, Parallax Software, Inc.
+// Copyright (c) 2026, Parallax Software, Inc.
 // 
 // This program is free software: you can redistribute it and/or modify
 // it under the terms of the GNU General Public License as published by
@@ -23,27 +23,26 @@
 // This notice may not be removed or altered from any source distribution.
 
 // Swig TCL input/output type parsers.
+
+#if SWIG_VERSION >= 0x040200
+%include "std_string_view.i"
+#endif
+
 %{
 
-#include "Machine.hh"
-#include "StringUtil.hh"
-#include "StringSet.hh"
-#include "StringSeq.hh"
-#include "PatternMatch.hh"
-#include "Vector.hh"
+#include <cctype>
+#include <string>
+
 #include "Network.hh"
 #include "Liberty.hh"
 #include "FuncExpr.hh"
 #include "TimingArc.hh"
-#include "TableModel.hh"
 #include "TimingRole.hh"
 #include "Graph.hh"
-#include "NetworkClass.hh"
 #include "Clock.hh"
-#include "Corner.hh"
+#include "Scene.hh"
 #include "Search.hh"
 #include "Path.hh"
-#include "search/Tag.hh"
 #include "PathEnd.hh"
 #include "SearchClass.hh"
 #include "CircuitSim.hh"
@@ -53,15 +52,14 @@
 
 namespace sta {
 
-typedef MinPulseWidthCheckSeq::Iterator MinPulseWidthCheckSeqIterator;
 typedef MinMaxAll MinMaxAllNull;
 
 #if TCL_MAJOR_VERSION < 9
-    typedef int Tcl_Size;
+typedef int Tcl_Size;
 #endif
 
 template <class TYPE>
-Vector<TYPE> *
+std::vector<TYPE> *
 tclListSeqPtr(Tcl_Obj *const source,
               swig_type_info *swig_type,
               Tcl_Interp *interp)
@@ -71,7 +69,7 @@ tclListSeqPtr(Tcl_Obj *const source,
 
   if (Tcl_ListObjGetElements(interp, source, &argc, &argv) == TCL_OK
       && argc > 0) {
-    Vector<TYPE> *seq = new Vector<TYPE>;
+    std::vector<TYPE> *seq = new std::vector<TYPE>;
     for (int i = 0; i < argc; i++) {
       void *obj;
       // Ignore returned TCL_ERROR because can't get swig_type_info.
@@ -261,9 +259,7 @@ setPtrTclList(SET_TYPE *set,
   Tcl_SetObjResult(interp, list);
 }
 
-////////////////////////////////////////////////////////////////
-
-} // namespace
+} // namespace sta
 
 using namespace sta;
 
@@ -275,55 +271,28 @@ using namespace sta;
 //
 ////////////////////////////////////////////////////////////////
 
-// String that is deleted after crossing over to tcland.
-%typemap(out) string {
-  string &str = $1;
+// SWIG before 4.2.0 has no std::string_view typemaps; newer SWIG defines
+// them and duplicates here conflict.
+#if SWIG_VERSION < 0x040200
+%typemap(out) std::string_view {
+  std::string str($1);
   // String is volatile because it is deleted.
   Tcl_SetResult(interp, const_cast<char*>(str.c_str()), TCL_VOLATILE);
 }
 
-// String that is deleted after crossing over to tcland.
-%typemap(out) TmpString* {
-  string *str = $1;
-  if (str) {
-    // String is volatile because it is deleted.
-    Tcl_SetResult(interp, const_cast<char*>(str->c_str()), TCL_VOLATILE);
-    delete str;
-  }
-  else
-    Tcl_SetResult(interp, nullptr, TCL_STATIC);
+%typemap(in) std::string_view {
+  Tcl_Size length;
+  const char *str = Tcl_GetStringFromObj($input, &length);
+  $1 = std::string_view(str, length);
 }
+#endif
 
-%typemap(in) StringSeq* {
-  $1 = tclListSeqConstChar($input, interp);
-}
-
-%typemap(in) StdStringSet* {
-  $1 = tclListSetStdString($input, interp);
-}
-
-%typemap(out) StringSeq* {
-  StringSeq *strs = $1;
-  Tcl_Obj *list = Tcl_NewListObj(0, nullptr);
-  for (const char *str : *strs) {
-    Tcl_Obj *obj = Tcl_NewStringObj(str, strlen(str));
-    Tcl_ListObjAppendElement(interp, list, obj);
-  }
-  Tcl_SetObjResult(interp, list);
+%typemap(in) StringSeq {
+  $1 = tclListStringSeq($input, interp);
 }
 
 %typemap(out) StringSeq {
   StringSeq &strs = $1;
-  Tcl_Obj *list = Tcl_NewListObj(0, nullptr);
-  for (const char *str : strs) {
-    Tcl_Obj *obj = Tcl_NewStringObj(str, strlen(str));
-    Tcl_ListObjAppendElement(interp, list, obj);
-  }
-  Tcl_SetObjResult(interp, list);
-}
-
-%typemap(out) StdStringSeq {
-  StdStringSeq &strs = $1;
   Tcl_Obj *list = Tcl_NewListObj(0, nullptr);
   for (const std::string &str : strs) {
     Tcl_Obj *obj = Tcl_NewStringObj(str.c_str(), str.size());
@@ -447,11 +416,11 @@ using namespace sta;
 }
 
 %typemap(in) Transition* {
-  int length;
+  Tcl_Size length;
   const char *arg = Tcl_GetStringFromObj($input, &length);
-  Transition *tr = Transition::find(arg);
+  Transition *tr = Transition::find(std::string_view(arg, length));
   if (tr == nullptr) {
-    tclArgError(interp, 2150, "Unknown transition '%s'.", arg);
+    tclArgError(interp, 2150, "Unknown transition '{}'.", arg);
     return TCL_ERROR;
   }
   else
@@ -460,18 +429,16 @@ using namespace sta;
 
 %typemap(out) Transition* {
   Transition *tr = $1;
-  const char *str = "";
-  if (tr)
-    str = tr->to_string().c_str();
-  Tcl_SetResult(interp, const_cast<char*>(str), TCL_STATIC);
+  const std::string &name = tr->to_string();
+  Tcl_SetResult(interp, const_cast<char*>(name.c_str()), TCL_STATIC);
 }
 
 %typemap(in) RiseFall* {
-  int length;
+  Tcl_Size length;
   const char *arg = Tcl_GetStringFromObj($input, &length);
-  const RiseFall *rf = RiseFall::find(arg);
+  const RiseFall *rf = RiseFall::find(std::string_view(arg, length));
   if (rf == nullptr) {
-    tclArgError(interp, 2151, "Unknown rise/fall edge '%s'.", arg);
+    tclArgError(interp, 2151, "Unknown rise/fall edge '{}'.", arg);
     return TCL_ERROR;
   }
   // Swig is retarded and drops const on args.
@@ -480,18 +447,16 @@ using namespace sta;
 
 %typemap(out) RiseFall* {
   const RiseFall *rf = $1;
-  const char *str = "";
-  if (rf)
-    str = rf->to_string().c_str();
-  Tcl_SetResult(interp, const_cast<char*>(str), TCL_STATIC);
+  const std::string &name = rf->shortName();
+  Tcl_SetResult(interp, const_cast<char*>(name.c_str()), TCL_STATIC);
 }
 
 %typemap(in) RiseFallBoth* {
-  int length;
+  Tcl_Size length;
   const char *arg = Tcl_GetStringFromObj($input, &length);
-  const RiseFallBoth *rf = RiseFallBoth::find(arg);
+  const RiseFallBoth *rf = RiseFallBoth::find(std::string_view(arg, length));
   if (rf == nullptr) {
-    tclArgError(interp, 2152, "Unknown transition name '%s'.", arg);
+    tclArgError(interp, 2152, "Unknown transition name '{}'.", arg);
     return TCL_ERROR;
   }
   // Swig is retarded and drops const on args.
@@ -499,19 +464,17 @@ using namespace sta;
 }
 
 %typemap(out) RiseFallBoth* {
-  RiseFallBoth *tr = $1;
-  const char *str = "";
-  if (tr)
-    str = tr->asString();
-  Tcl_SetResult(interp, const_cast<char*>(str), TCL_STATIC);
+  RiseFallBoth *rf = $1;
+  const std::string &name = tr->shortName();
+  Tcl_SetResult(interp, const_cast<char*>(name.c_str()), TCL_STATIC);
 }
 
 %typemap(in) PortDirection* {
-  int length;
+  Tcl_Size length;
   const char *arg = Tcl_GetStringFromObj($input, &length);
   PortDirection *dir = PortDirection::find(arg);
   if (dir == nullptr) {
-    tclArgError(interp, 2153, "Unknown port direction '%s'.", arg);
+    tclArgError(interp, 2153, "Unknown port direction '{}'.", arg);
     return TCL_ERROR;
   }
   else
@@ -519,14 +482,14 @@ using namespace sta;
  }
 
 %typemap(in) TimingRole* {
-  int length;
+  Tcl_Size length;
   const char *arg = Tcl_GetStringFromObj($input, &length);
   const TimingRole *role = TimingRole::find(arg);
   if (role)
     // Swig is retarded and drops const on args.
     $1 = const_cast<TimingRole*>(TimingRole::find(arg));
   else {
-    tclArgError(interp, 2154, "Unknown timing role '%s'.", arg);
+    tclArgError(interp, 2154, "Unknown timing role '{}'.", arg);
     return TCL_ERROR;
   }
 }
@@ -536,35 +499,35 @@ using namespace sta;
 }
 
 %typemap(in) LogicValue {
-  int length;
-  const char *arg = Tcl_GetStringFromObj($input, &length);
-  if (stringEq(arg, "0") || stringEq(arg, "zero"))
+  Tcl_Size length;
+  std::string arg = Tcl_GetStringFromObj($input, &length);
+  if (arg == "0" || stringEqual(arg, "zero"))
     $1 = LogicValue::zero;
-  else if (stringEq(arg, "1") || stringEq(arg, "one"))
+  else if (arg == "1" || stringEqual(arg, "one"))
     $1 = LogicValue::one;
-  else if (stringEq(arg, "X"))
+  else if (stringEqual(arg, "X"))
     $1 = LogicValue::unknown;
-  else if (stringEq(arg, "rise") || stringEq(arg, "rising"))
+  else if (stringEqual(arg, "rise") || stringEqual(arg, "rising"))
     $1 = LogicValue::rise;
-  else if (stringEq(arg, "fall") || stringEq(arg, "falling"))
+  else if (stringEqual(arg, "fall") || stringEqual(arg, "falling"))
     $1 = LogicValue::fall;
   else {
-    tclArgError(interp, 2155, "Unknown logic value '%s'.", arg);
+    tclArgError(interp, 2155, "Unknown logic value '{}'.", arg.c_str());
     return TCL_ERROR;
   }
 }
 
 %typemap(in) AnalysisType {
-  int length;
+  Tcl_Size length;
   const char *arg = Tcl_GetStringFromObj($input, &length);
   if (stringEqual(arg, "single"))
     $1 = AnalysisType::single;
   else if (stringEqual(arg, "bc_wc"))
     $1 = AnalysisType::bc_wc;
-  else if (stringEq(arg, "on_chip_variation"))
+  else if (stringEqual(arg, "on_chip_variation"))
     $1 = AnalysisType::ocv;
   else {
-    tclArgError(interp, 2156, "Unknown analysis type '%s'.", arg);
+    tclArgError(interp, 2156, "Unknown analysis type '{}'.", arg.c_str());
     return TCL_ERROR;
   }
 }
@@ -577,6 +540,10 @@ using namespace sta;
 %typemap(in) InstanceSeq* {
   $1 = tclListSeqPtr<const Instance*>($input, SWIGTYPE_p_Instance, interp);
 }
+
+%typemap(in) InstanceSeq {
+  $1 = tclListSeq<const Instance*>($input, SWIGTYPE_p_Instance, interp);
+ }
 
 %typemap(out) InstanceSeq {
   seqTclList<InstanceSeq, Instance>($1, SWIGTYPE_p_Instance, interp);
@@ -765,7 +732,7 @@ using namespace sta;
         floats->push_back(static_cast<float>(value));
       else {
         delete floats;
-        tclArgError(interp, 2157, "%s is not a floating point number.", arg);
+        tclArgError(interp, 2157, "{} is not a floating point number.", arg);
         return TCL_ERROR;
       }
     }
@@ -785,8 +752,28 @@ using namespace sta;
   Tcl_SetObjResult(interp, list);
 }
 
+%typemap(in) FloatSeq {
+  Tcl_Size argc;
+  Tcl_Obj **argv;
+  FloatSeq floats;
+
+  if (Tcl_ListObjGetElements(interp, $input, &argc, &argv) == TCL_OK) {
+    for (int i = 0; i < argc; i++) {
+      char *arg = Tcl_GetString(argv[i]);
+      double value;
+      if (Tcl_GetDouble(interp, arg, &value) == TCL_OK)
+        floats.push_back(static_cast<float>(value));
+      else {
+        tclArgError(interp, 2175, "{} is not a floating point number.", arg);
+        return TCL_ERROR;
+      }
+    }
+  }
+  $1 = floats;
+}
+
 %typemap(out) FloatSeq {
-  FloatSeq &floats = $1;
+  const FloatSeq &floats = $1;
   Tcl_Obj *list = Tcl_NewListObj(0, nullptr);
   for (float f : floats) {
     Tcl_Obj *obj = Tcl_NewDoubleObj(f);
@@ -795,22 +782,19 @@ using namespace sta;
   Tcl_SetObjResult(interp, list);
 }
 
-%typemap(in) IntSeq* {
+%typemap(in) IntSeq {
   Tcl_Size argc;
   Tcl_Obj **argv;
-  IntSeq *ints = nullptr;
 
+  IntSeq ints;
   if (Tcl_ListObjGetElements(interp, $input, &argc, &argv) == TCL_OK) {
-    if (argc)
-      ints = new IntSeq;
     for (int i = 0; i < argc; i++) {
       char *arg = Tcl_GetString(argv[i]);
       int value;
       if (Tcl_GetInt(interp, arg, &value) == TCL_OK)
-        ints->push_back(value);
+        ints.push_back(value);
       else {
-        delete ints;
-        tclArgError(interp, 2158, "%s is not an integer.", arg);
+        tclArgError(interp, 2158, "{} is not an integer.", arg);
         return TCL_ERROR;
       }
     }
@@ -818,19 +802,21 @@ using namespace sta;
   $1 = ints;
 }
 
-%typemap(out) Table1 {
-  Table1 &table = $1;
+%typemap(out) Table {
+  Table &table = $1;
   if (table.axis1()) {
     Tcl_Obj *list3 = Tcl_NewListObj(0, nullptr);
     Tcl_Obj *list1 = Tcl_NewListObj(0, nullptr);
-    for (float f : *table.axis1()->values()) {
+    for (float f : table.axis1()->values()) {
       Tcl_Obj *obj = Tcl_NewDoubleObj(f);
       Tcl_ListObjAppendElement(interp, list1, obj);
     }
     Tcl_Obj *list2 = Tcl_NewListObj(0, nullptr);
-    for (float f : *table.values()) {
-      Tcl_Obj *obj = Tcl_NewDoubleObj(f);
-      Tcl_ListObjAppendElement(interp, list2, obj);
+    if (table.values()) {
+      for (float f : *table.values()) {
+        Tcl_Obj *obj = Tcl_NewDoubleObj(f);
+        Tcl_ListObjAppendElement(interp, list2, obj);
+      }
     }
     Tcl_ListObjAppendElement(interp, list3, list1);
     Tcl_ListObjAppendElement(interp, list3, list2);
@@ -838,19 +824,23 @@ using namespace sta;
   }
 }
 
-%typemap(out) const Table1* {
-  const Table1 *table = $1;
+%typemap(out) const Table* {
+  const Table *table = $1;
   Tcl_Obj *list3 = Tcl_NewListObj(0, nullptr);
   if (table) {
     Tcl_Obj *list1 = Tcl_NewListObj(0, nullptr);
-    for (float f : *table->axis1()->values()) {
-      Tcl_Obj *obj = Tcl_NewDoubleObj(f);
-      Tcl_ListObjAppendElement(interp, list1, obj);
+    if (table->axis1()) {
+      for (float f : table->axis1()->values()) {
+        Tcl_Obj *obj = Tcl_NewDoubleObj(f);
+        Tcl_ListObjAppendElement(interp, list1, obj);
+      }
     }
     Tcl_Obj *list2 = Tcl_NewListObj(0, nullptr);
-    for (float f : *table->values()) {
-      Tcl_Obj *obj = Tcl_NewDoubleObj(f);
-      Tcl_ListObjAppendElement(interp, list2, obj);
+    if (table->values()) {
+      for (float f : *table->values()) {
+        Tcl_Obj *obj = Tcl_NewDoubleObj(f);
+        Tcl_ListObjAppendElement(interp, list2, obj);
+      }
     }
     Tcl_ListObjAppendElement(interp, list3, list1);
     Tcl_ListObjAppendElement(interp, list3, list2);
@@ -859,14 +849,14 @@ using namespace sta;
 }
 
 %typemap(in) MinMax* {
-  int length;
+  Tcl_Size length;
   char *arg = Tcl_GetStringFromObj($input, &length);
   // Swig is retarded and drops const on args.
   MinMax *min_max = const_cast<MinMax*>(MinMax::find(arg));
   if (min_max)
     $1 = min_max;
   else {
-    tclArgError(interp, 2159, "%s not min or max.", arg);
+    tclArgError(interp, 2159, "{} not min or max.", arg);
     return TCL_ERROR;
   }
 }
@@ -880,20 +870,20 @@ using namespace sta;
 }
 
 %typemap(in) MinMaxAll* {
-  int length;
+  Tcl_Size length;
   char *arg = Tcl_GetStringFromObj($input, &length);
   // Swig is retarded and drops const on args.
   MinMaxAll *min_max = const_cast<MinMaxAll*>(MinMaxAll::find(arg));
   if (min_max)
     $1 = min_max;
   else {
-    tclArgError(interp, 2160, "%s not min, max or min_max.", arg);
+    tclArgError(interp, 2160, "{} not min, max or min_max.", arg);
     return TCL_ERROR;
   }
 }
 
 %typemap(in) MinMaxAllNull* {
-  int length;
+  Tcl_Size length;
   char *arg = Tcl_GetStringFromObj($input, &length);
   if (stringEqual(arg, "NULL"))
     $1 = nullptr;
@@ -903,7 +893,7 @@ using namespace sta;
     if (min_max)
       $1 = min_max;
     else {
-      tclArgError(interp, 2161, "%s not min, max or min_max.", arg);
+      tclArgError(interp, 2161, "{} not min, max or min_max.", arg);
       return TCL_ERROR;
     }
   }
@@ -915,144 +905,145 @@ using namespace sta;
 
 // SetupHold is typedef'd to MinMax.
 %typemap(in) const SetupHold* {
-  int length;
+  Tcl_Size length;
   char *arg = Tcl_GetStringFromObj($input, &length);
   // Swig is retarded and drops const on args.
   if (stringEqual(arg, "hold")
       || stringEqual(arg, "min"))
     $1 = const_cast<MinMax*>(MinMax::min());
   else if (stringEqual(arg, "setup")
-	   || stringEqual(arg, "max"))
+           || stringEqual(arg, "max"))
     $1 = const_cast<MinMax*>(MinMax::max());
   else {
-    tclArgError(interp, 2162, "%s not setup, hold, min or max.", arg);
+    tclArgError(interp, 2162, "{} not setup, hold, min or max.", arg);
     return TCL_ERROR;
   }
 }
 
 // SetupHoldAll is typedef'd to MinMaxAll.
 %typemap(in) const SetupHoldAll* {
-  int length;
+  Tcl_Size length;
   char *arg = Tcl_GetStringFromObj($input, &length);
   // Swig is retarded and drops const on args.
   if (stringEqual(arg, "hold")
       || stringEqual(arg, "min"))
     $1 = const_cast<SetupHoldAll*>(SetupHoldAll::min());
   else if (stringEqual(arg, "setup")
-	   || stringEqual(arg, "max"))
+           || stringEqual(arg, "max"))
     $1 = const_cast<SetupHoldAll*>(SetupHoldAll::max());
   else if (stringEqual(arg, "setup_hold")
-	   || stringEqual(arg, "min_max"))
+           || stringEqual(arg, "min_max"))
     $1 = const_cast<SetupHoldAll*>(SetupHoldAll::all());
   else {
-    tclArgError(interp, 2163, "%s not setup, hold, setup_hold, min, max or min_max.", arg);
+    tclArgError(interp, 2163, "{} not setup, hold, setup_hold, min, max or min_max.",
+                arg);
     return TCL_ERROR;
   }
 }
 
 // EarlyLate is typedef'd to MinMax.
 %typemap(in) const EarlyLate* {
-  int length;
+  Tcl_Size length;
   char *arg = Tcl_GetStringFromObj($input, &length);
   // Swig is retarded and drops const on args.
   EarlyLate *early_late = const_cast<EarlyLate*>(EarlyLate::find(arg));
   if (early_late)
     $1 = early_late;
   else {
-    tclArgError(interp, 2164, "%s not early/min, late/max or early_late/min_max.", arg);
+    tclArgError(interp, 2164, "{} not early/min, late/max or early_late/min_max.", arg);
     return TCL_ERROR;
   }
 }
 
 // EarlyLateAll is typedef'd to MinMaxAll.
 %typemap(in) const EarlyLateAll* {
-  int length;
+  Tcl_Size length;
   char *arg = Tcl_GetStringFromObj($input, &length);
   // Swig is retarded and drops const on args.
   EarlyLateAll *early_late = const_cast<EarlyLateAll*>(EarlyLateAll::find(arg));
   if (early_late)
     $1 = early_late;
   else {
-    tclArgError(interp, 2165, "%s not early/min, late/max or early_late/min_max.", arg);
+    tclArgError(interp, 2165, "{} not early/min, late/max or early_late/min_max.", arg);
     return TCL_ERROR;
   }
 }
 
 %typemap(in) TimingDerateType {
-  int length;
+  Tcl_Size length;
   char *arg = Tcl_GetStringFromObj($input, &length);
-  if (stringEq(arg, "net_delay"))
+  if (stringEqual(arg, "net_delay"))
     $1 = TimingDerateType::net_delay;
-  else if (stringEq(arg, "cell_delay"))
+  else if (stringEqual(arg, "cell_delay"))
     $1 = TimingDerateType::cell_delay;
-  else if (stringEq(arg, "cell_check"))
+  else if (stringEqual(arg, "cell_check"))
     $1 = TimingDerateType::cell_check;
   else {
-    tclArgError(interp, 2166, "%s not net_delay, cell_delay or cell_check.", arg);
+    tclArgError(interp, 2166, "{} not net_delay, cell_delay or cell_check.", arg);
     return TCL_ERROR;
   }
 }
 
 %typemap(in) TimingDerateCellType {
-  int length;
+  Tcl_Size length;
   char *arg = Tcl_GetStringFromObj($input, &length);
-  if (stringEq(arg, "cell_delay"))
+  if (stringEqual(arg, "cell_delay"))
     $1 = TimingDerateCellType::cell_delay;
-  else if (stringEq(arg, "cell_check"))
+  else if (stringEqual(arg, "cell_check"))
     $1 = TimingDerateCellType::cell_check;
   else {
-    tclArgError(interp, 2167, "%s not cell_delay or cell_check.", arg);
+    tclArgError(interp, 2167, "{} not cell_delay or cell_check.", arg);
     return TCL_ERROR;
   }
 }
 
 %typemap(in) PathClkOrData {
-  int length;
-  char *arg = Tcl_GetStringFromObj($input, &length);
-  if (stringEq(arg, "clk"))
+  Tcl_Size length;
+  std::string arg = Tcl_GetStringFromObj($input, &length);
+  if (stringEqual(arg, "clk"))
     $1 = PathClkOrData::clk;
-  else if (stringEq(arg, "data"))
+  else if (stringEqual(arg, "data"))
     $1 = PathClkOrData::data;
   else {
-    tclArgError(interp, 2168, "%s not clk or data.", arg);
+    tclArgError(interp, 2168, "{} not clk or data.", arg.c_str());
     return TCL_ERROR;
   }
 }
 
 %typemap(in) ReportSortBy {
-  int length;
-  char *arg = Tcl_GetStringFromObj($input, &length);
-  if (stringEq(arg, "group"))
+  Tcl_Size length;
+  std::string arg = Tcl_GetStringFromObj($input, &length);
+  if (stringEqual(arg, "group"))
     $1 = sort_by_group;
-  else if (stringEq(arg, "slack"))
+  else if (stringEqual(arg, "slack"))
     $1 = sort_by_slack;
   else {
-    tclArgError(interp, 2169, "%s not group or slack.", arg);
+    tclArgError(interp, 2169, "{} not group or slack.", arg.c_str());
     return TCL_ERROR;
   }
 }
 
 %typemap(in) ReportPathFormat {
-  int length;
-  char *arg = Tcl_GetStringFromObj($input, &length);
-  if (stringEq(arg, "full"))
+  Tcl_Size length;
+  std::string arg = Tcl_GetStringFromObj($input, &length);
+  if (stringEqual(arg, "full"))
     $1 = ReportPathFormat::full;
-  else if (stringEq(arg, "full_clock"))
+  else if (stringEqual(arg, "full_clock"))
     $1 = ReportPathFormat::full_clock;
-  else if (stringEq(arg, "full_clock_expanded"))
+  else if (stringEqual(arg, "full_clock_expanded"))
     $1 = ReportPathFormat::full_clock_expanded;
-  else if (stringEq(arg, "short"))
+  else if (stringEqual(arg, "short"))
     $1 = ReportPathFormat::shorter;
-  else if (stringEq(arg, "end"))
+  else if (stringEqual(arg, "end"))
     $1 = ReportPathFormat::endpoint;
-  else if (stringEq(arg, "summary"))
+  else if (stringEqual(arg, "summary"))
     $1 = ReportPathFormat::summary;
-  else if (stringEq(arg, "slack_only"))
+  else if (stringEqual(arg, "slack_only"))
     $1 = ReportPathFormat::slack_only;
-  else if (stringEq(arg, "json"))
+  else if (stringEqual(arg, "json"))
     $1 = ReportPathFormat::json;
   else {
-    tclArgError(interp, 2170, "unknown path type %s.", arg);
+    tclArgError(interp, 2170, "unknown path type {}.", arg.c_str());
     return TCL_ERROR;
   }
 }
@@ -1109,16 +1100,11 @@ using namespace sta;
 %typemap(out) CheckErrorSeq & {
   Tcl_Obj *error_list = Tcl_NewListObj(0, nullptr);
   CheckErrorSeq *check_errors = $1;
-  CheckErrorSeq::Iterator check_iter(check_errors);
-  while (check_iter.hasNext()) {
-    CheckError *error = check_iter.next();
+  for (CheckError *error : *check_errors) {
     Tcl_Obj *string_list = Tcl_NewListObj(0, nullptr);
-    CheckError::Iterator string_iter(error);
-    while (string_iter.hasNext()) {
-      const char *str = string_iter.next();
-      size_t str_len = strlen(str);
-      Tcl_Obj *obj = Tcl_NewStringObj(const_cast<char*>(str),
-				      static_cast<int>(str_len));
+    for (const std::string &str : *error) {
+      Tcl_Obj *obj = Tcl_NewStringObj(str.c_str(),
+                                      static_cast<int>(str.size()));
       Tcl_ListObjAppendElement(interp, string_list, obj);
     }
     Tcl_ListObjAppendElement(interp, error_list, string_list);
@@ -1153,11 +1139,6 @@ using namespace sta;
   seqTclList<PathEndSeq, PathEnd>($1, SWIGTYPE_p_PathEnd, interp);
 }
 
-%typemap(out) MinPulseWidthCheckSeqIterator* {
-  Tcl_Obj *obj = SWIG_NewInstanceObj($1, $1_descriptor, false);
-  Tcl_SetObjResult(interp, obj);
-}
-
 %typemap(out) PathSeq* {
   Tcl_Obj *obj = SWIG_NewInstanceObj($1, $1_descriptor, false);
   Tcl_SetObjResult(interp, obj);
@@ -1172,21 +1153,6 @@ using namespace sta;
     Tcl_ListObjAppendElement(interp, list, obj);
   }
   Tcl_SetObjResult(interp, list);
-}
-
-%typemap(out) MinPulseWidthCheck* {
-  Tcl_Obj *obj = SWIG_NewInstanceObj($1, $1_descriptor, false);
-  Tcl_SetObjResult(interp, obj);
-}
-
-%typemap(out) MinPulseWidthCheckSeq & {
-  Tcl_Obj *obj = SWIG_NewInstanceObj($1, $1_descriptor, false);
-  Tcl_SetObjResult(interp, obj);
-}
-
-%typemap(out) MinPulseWidthCheckSeqIterator & {
-  Tcl_Obj *obj = SWIG_NewInstanceObj($1, $1_descriptor, false);
-  Tcl_SetObjResult(interp, obj);
 }
 
 %typemap(out) VertexPathIterator* {
@@ -1219,59 +1185,78 @@ using namespace sta;
   Tcl_SetObjResult(interp, obj);
 }
 
-%typemap(out) Delay {
-  Tcl_SetObjResult(interp,Tcl_NewDoubleObj(delayAsFloat($1)));
-}
-
-%typemap(out) Arrival {
-  Tcl_SetObjResult(interp,Tcl_NewDoubleObj(delayAsFloat($1)));
-}
-
-%typemap(out) Required {
-  Tcl_SetObjResult(interp,Tcl_NewDoubleObj(delayAsFloat($1)));
-}
-
-%typemap(out) Slack {
-  Tcl_SetObjResult(interp,Tcl_NewDoubleObj(delayAsFloat($1)));
-}
-
-%typemap(out) ArcDelay {
-  Tcl_SetObjResult(interp,Tcl_NewDoubleObj(delayAsFloat($1)));
-}
-
-%typemap(out) Slew {
-  Tcl_SetObjResult(interp,Tcl_NewDoubleObj(delayAsFloat($1)));
-}
-
-%typemap(out) Crpr {
-  Tcl_SetObjResult(interp,Tcl_NewDoubleObj(delayAsFloat($1)));
-}
-
-%typemap(in) PathGroupNameSet* {
-  $1 = tclListSetConstChar($input, interp);
-}
-
 %typemap(in) StringSet* {
   $1 = tclListSetConstChar($input, interp);
 }
 
-%typemap(out) Corner* {
-  Tcl_Obj *obj = SWIG_NewInstanceObj($1, $1_descriptor, false);
-  Tcl_SetObjResult(interp, obj);
+%typemap(in) Mode* {
+  Tcl_Size length;
+  const char *arg = Tcl_GetStringFromObj($input, &length);
+  if (stringEqual(arg, "NULL"))
+    $1 = nullptr;
+  else {
+    void *obj;
+    if (SWIG_ConvertPtr($input, &obj, SWIGTYPE_p_Mode, false) != TCL_OK) {
+      tclArgError(interp, 2174, "{} is not a mode object.", arg);
+      return TCL_ERROR;
+    }
+    $1 = reinterpret_cast<Mode*>(obj);
+  }
 }
 
-%typemap(out) Corners* {
-  Tcl_Obj *list = Tcl_NewListObj(0, nullptr);
-  Corners *corners = $1;
-  for (Corner *corner : *corners) {
-    Tcl_Obj *obj = SWIG_NewInstanceObj(corner, SWIGTYPE_p_Corner, false);
-    Tcl_ListObjAppendElement(interp, list, obj);
+%typemap(out) Mode* {
+  Mode *mode = $1;
+  if (mode) {
+    Tcl_Obj *obj = SWIG_NewInstanceObj(mode, SWIGTYPE_p_Mode, false);
+    Tcl_SetObjResult(interp, obj);
   }
-  Tcl_SetObjResult(interp, list);
+  else
+    Tcl_SetResult(interp, const_cast<char*>("NULL"), TCL_STATIC);
+}
+
+%typemap(in) ModeSeq {
+  $1 = tclListSeq<Mode*>($input, SWIGTYPE_p_Mode, interp);
+}
+
+%typemap(out) ModeSeq {
+  seqTclList<ModeSeq, Mode>($1, SWIGTYPE_p_Mode, interp);
+}
+
+%typemap(in) Scene* {
+  Tcl_Size length;
+  const char *arg = Tcl_GetStringFromObj($input, &length);
+  if (stringEqual(arg, "NULL"))
+    $1 = nullptr;
+  else {
+    void *obj;
+    if (SWIG_ConvertPtr($input, &obj, SWIGTYPE_p_Scene, false) != TCL_OK) {
+      tclArgError(interp, 2173, "{} is not a scene object.", arg);
+      return TCL_ERROR;
+    }
+    $1 = reinterpret_cast<Scene*>(obj);
+  }
+}
+
+%typemap(out) Scene* {
+  Scene *scene = $1;
+  if (scene) {
+    Tcl_Obj *obj = SWIG_NewInstanceObj(scene, SWIGTYPE_p_Scene, false);
+    Tcl_SetObjResult(interp, obj);
+  }
+  else
+    Tcl_SetResult(interp, const_cast<char*>("NULL"), TCL_STATIC);
+}
+
+%typemap(in) SceneSeq {
+  $1 = tclListSeq<Scene*>($input, SWIGTYPE_p_Scene, interp);
+}
+
+%typemap(out) SceneSeq {
+  seqTclList<SceneSeq, Scene>($1, SWIGTYPE_p_Scene, interp);
 }
 
 %typemap(in) PropertyValue {
-  int length;
+  Tcl_Size length;
   const char *arg = Tcl_GetStringFromObj($input, &length);
   $1 = PropertyValue(arg);
 }
@@ -1279,108 +1264,103 @@ using namespace sta;
 %typemap(out) PropertyValue {
   PropertyValue value = $1;
   switch (value.type()) {
-  case PropertyValue::Type::type_none:
+  case PropertyValue::Type::none:
     Tcl_SetResult(interp, const_cast<char*>(""), TCL_STATIC);
     break;
-  case PropertyValue::Type::type_string:
-    Tcl_SetResult(interp, const_cast<char*>(value.stringValue()), TCL_VOLATILE);
+  case PropertyValue::Type::string:
+    Tcl_SetResult(interp, const_cast<char*>(value.stringValue().c_str()), TCL_VOLATILE);
     break;
-  case PropertyValue::Type::type_float: {
+  case PropertyValue::Type::float_: {
     const Unit *unit = value.unit();
-    const char *float_string = unit->asString(value.floatValue(), 6);
-    Tcl_SetResult(interp, const_cast<char*>(float_string), TCL_VOLATILE);
+    std::string float_string = unit->asString(value.floatValue(), 6);
+    Tcl_SetResult(interp, const_cast<char*>(float_string.c_str()), TCL_VOLATILE);
   }
     break;
-  case PropertyValue::Type::type_bool: {
+  case PropertyValue::Type::bool_: {
     const char *bool_string = value.boolValue() ? "1" : "0";
     Tcl_SetResult(interp, const_cast<char*>(bool_string), TCL_STATIC);
   }
     break;
-  case PropertyValue::Type::type_library: {
+  case PropertyValue::Type::library: {
     Tcl_Obj *obj = SWIG_NewInstanceObj(const_cast<Library*>(value.library()),
-				       SWIGTYPE_p_Library, false);
+                                       SWIGTYPE_p_Library, false);
     Tcl_SetObjResult(interp, obj);
   }
     break;
-  case PropertyValue::Type::type_cell: {
+  case PropertyValue::Type::cell: {
     Tcl_Obj *obj = SWIG_NewInstanceObj(const_cast<Cell*>(value.cell()),
-				       SWIGTYPE_p_Cell, false);
+                                       SWIGTYPE_p_Cell, false);
     Tcl_SetObjResult(interp, obj);
   }
     break;
-  case PropertyValue::Type::type_port: {
+  case PropertyValue::Type::port: {
     Tcl_Obj *obj = SWIG_NewInstanceObj(const_cast<Port*>(value.port()),
-				       SWIGTYPE_p_Port, false);
+                                       SWIGTYPE_p_Port, false);
     Tcl_SetObjResult(interp, obj);
   }
     break;
-  case PropertyValue::Type::type_liberty_library: {
+  case PropertyValue::Type::liberty_library: {
     Tcl_Obj *obj = SWIG_NewInstanceObj(const_cast<LibertyLibrary*>(value.libertyLibrary()),
-				       SWIGTYPE_p_LibertyLibrary, false);
+                                       SWIGTYPE_p_LibertyLibrary, false);
     Tcl_SetObjResult(interp, obj);
   }
     break;
-  case PropertyValue::Type::type_liberty_cell: {
+  case PropertyValue::Type::liberty_cell: {
     Tcl_Obj *obj = SWIG_NewInstanceObj(const_cast<LibertyCell*>(value.libertyCell()),
-				       SWIGTYPE_p_LibertyCell, false);
+                                       SWIGTYPE_p_LibertyCell, false);
     Tcl_SetObjResult(interp, obj);
   }
     break;
-  case PropertyValue::Type::type_liberty_port: {
+  case PropertyValue::Type::liberty_port: {
     Tcl_Obj *obj = SWIG_NewInstanceObj(const_cast<LibertyPort*>(value.libertyPort()),
-				       SWIGTYPE_p_LibertyPort, false);
+                                       SWIGTYPE_p_LibertyPort, false);
     Tcl_SetObjResult(interp, obj);
   }
     break;
-  case PropertyValue::Type::type_instance: {
+  case PropertyValue::Type::instance: {
     Tcl_Obj *obj = SWIG_NewInstanceObj(const_cast<Instance*>(value.instance()),
-				       SWIGTYPE_p_Instance, false);
+                                       SWIGTYPE_p_Instance, false);
     Tcl_SetObjResult(interp, obj);
   }
     break;
-  case PropertyValue::Type::type_pin: {
+  case PropertyValue::Type::pin: {
     Tcl_Obj *obj = SWIG_NewInstanceObj(const_cast<Pin*>(value.pin()),
                                        SWIGTYPE_p_Pin, false);
     Tcl_SetObjResult(interp, obj);
   }
     break;
-  case PropertyValue::Type::type_pins: {
+  case PropertyValue::Type::pins: {
     Tcl_Obj *list = Tcl_NewListObj(0, nullptr);
-    PinSeq *pins = value.pins();
-    PinSeq::Iterator pin_iter(pins);
-    while (pin_iter.hasNext()) {
-      const Pin *pin = pin_iter.next();
+    for (const Pin *pin : *value.pins()) {
       Tcl_Obj *obj = SWIG_NewInstanceObj(const_cast<Pin*>(pin), SWIGTYPE_p_Pin, false);
       Tcl_ListObjAppendElement(interp, list, obj);
     }
     Tcl_SetObjResult(interp, list);
   }
     break;
-  case PropertyValue::Type::type_net: {
+  case PropertyValue::Type::net: {
     Tcl_Obj *obj = SWIG_NewInstanceObj(const_cast<Net*>(value.net()),
-				       SWIGTYPE_p_Net, false);
+                                       SWIGTYPE_p_Net, false);
     Tcl_SetObjResult(interp, obj);
   }
     break;
-  case PropertyValue::Type::type_clk: {
+  case PropertyValue::Type::clk: {
     Tcl_Obj *obj = SWIG_NewInstanceObj(const_cast<Clock*>(value.clock()),
-				       SWIGTYPE_p_Clock, false);
+                                       SWIGTYPE_p_Clock, false);
     Tcl_SetObjResult(interp, obj);
   }
     break;
-  case PropertyValue::Type::type_clks: {
+  case PropertyValue::Type::clks: {
     Tcl_Obj *list = Tcl_NewListObj(0, nullptr);
     ClockSeq *clks = value.clocks();
-    ClockSeq::Iterator clk_iter(clks);
-    while (clk_iter.hasNext()) {
-      Clock *clk = clk_iter.next();
+    for (Clock *clk : *clks) {
       Tcl_Obj *obj = SWIG_NewInstanceObj(clk, SWIGTYPE_p_Clock, false);
       Tcl_ListObjAppendElement(interp, list, obj);
     }
     Tcl_SetObjResult(interp, list);
   }
     break;
-  case PropertyValue::Type::type_paths: {
+  case PropertyValue::Type::paths: {
     Tcl_Obj *list = Tcl_NewListObj(0, nullptr);
     for (const Path *path : *value.paths()) {
       Tcl_Obj *obj = SWIG_NewInstanceObj(const_cast<Path*>(path), SWIGTYPE_p_Path, false);
@@ -1389,22 +1369,21 @@ using namespace sta;
     Tcl_SetObjResult(interp, list);
   }
     break;
-  case PropertyValue::Type::type_pwr_activity: {
+  case PropertyValue::Type::pwr_activity: {
     PwrActivity activity = value.pwrActivity();
     Tcl_Obj *list = Tcl_NewListObj(0, nullptr);
     Tcl_Obj *obj;
-    const char *str;
 
-    str = stringPrintTmp("%.5e", activity.density());
-    obj = Tcl_NewStringObj(str, strlen(str));
+    std::string density = sta::format("{:.5e}", activity.density());
+    obj = Tcl_NewStringObj(density.c_str(), density.size());
     Tcl_ListObjAppendElement(interp, list, obj);
 
-    str = stringPrintTmp("%.3f", activity.duty());
-    obj = Tcl_NewStringObj(str, strlen(str));
+    std::string duty = sta::format("{:.3f}", activity.duty());
+    obj = Tcl_NewStringObj(duty.c_str(), duty.size());
     Tcl_ListObjAppendElement(interp, list, obj);
 
-    str = activity.originName();
-    obj = Tcl_NewStringObj(str, strlen(str));
+    std::string name = activity.originName();
+    obj = Tcl_NewStringObj(name.c_str(), name.size());
     Tcl_ListObjAppendElement(interp, list, obj);
 
     Tcl_SetObjResult(interp, list);
@@ -1414,16 +1393,16 @@ using namespace sta;
 }
 
 %typemap(in) CircuitSim {
-  int length;
-  char *arg = Tcl_GetStringFromObj($input, &length);
-  if (stringEq(arg, "hspice"))
+  Tcl_Size length;
+  std::string arg = Tcl_GetStringFromObj($input, &length);
+  if (stringEqual(arg, "hspice"))
     $1 = CircuitSim::hspice;
-  else if (stringEq(arg, "ngspice"))
+  else if (stringEqual(arg, "ngspice"))
     $1 = CircuitSim::ngspice;
-  else if (stringEq(arg, "xyce"))
+  else if (stringEqual(arg, "xyce"))
     $1 = CircuitSim::xyce;
   else {
-    tclArgError(interp, 2171, "unknown circuit simulator %s.", arg);
+    tclArgError(interp, 2171, "unknown circuit simulator {}.", arg.c_str());
     return TCL_ERROR;
   }
 }

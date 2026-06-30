@@ -1,5 +1,5 @@
 // OpenSTA, Static Timing Analyzer
-// Copyright (c) 2025, Parallax Software, Inc.
+// Copyright (c) 2026, Parallax Software, Inc.
 // 
 // This program is free software: you can redistribute it and/or modify
 // it under the terms of the GNU General Public License as published by
@@ -26,46 +26,35 @@
 
 #include <cmath> // abs
 
+#include "Format.hh"
 #include "StringUtil.hh"
 #include "MinMax.hh"  // INF
 #include "Fuzzy.hh"
 
 namespace sta {
 
-using std::abs;
-
-
 Unit::Unit(const char *suffix) :
   scale_(1.0),
   suffix_(suffix),
   digits_(3)
 {
-  setScaledSuffix();
+  setScaleAbbrevSuffix();
 }
 
 Unit::Unit(float scale,
-	   const char *suffix,
-	   int digits) :
+           const char *suffix,
+           int digits) :
   scale_(scale),
   suffix_(suffix),
   digits_(digits)
 {
-  setScaledSuffix();
+  setScaleAbbrevSuffix();
 }
 
 void
-Unit::setScaledSuffix()
+Unit::setScaleAbbrevSuffix()
 {
-  scaled_suffix_ = scaleAbbreviation() + suffix_;
-}
-
-void
-Unit::operator=(const Unit &unit)
-{
-  scale_ = unit.scale_;
-  suffix_ = unit.suffix_;
-  scaled_suffix_ = unit.scaled_suffix_;
-  digits_ = unit.digits_;
+  scale_abbrev_suffix_ = scaleAbbreviation() + suffix_;
 }
 
 double
@@ -84,10 +73,10 @@ void
 Unit::setScale(float scale)
 {
   scale_ = scale;
-  setScaledSuffix();
+  setScaleAbbrevSuffix();
 }
 
-const char *
+std::string
 Unit::scaleAbbreviation() const
 {
   if (fuzzyEqual(scale_, 1E+6))
@@ -110,11 +99,40 @@ Unit::scaleAbbreviation() const
     return "?";
 }
 
+std::string
+Unit::scaleString() const
+{
+  if (fuzzyEqual(scale_, 1E+6))
+    return "1M";
+  else if (fuzzyEqual(scale_, 1E+3))
+    return "1k";
+  if (fuzzyEqual(scale_, 1.0))
+    return "1";
+  else if (fuzzyEqual(scale_, 1E-3))
+    return "1m";
+  else if (fuzzyEqual(scale_, 1E-6))
+    return "1u";
+  else if (fuzzyEqual(scale_, 1E-9))
+    return "1n";
+  else if (fuzzyEqual(scale_, 1E-12))
+    return "1p";
+  else if (fuzzyEqual(scale_, 1E-15))
+    return "1f";
+  else
+    return sta::format("{:.1e}", scale_);
+}
+
+std::string
+Unit::scaleSuffix() const
+{
+  return scaleString() + suffix_;
+}
+
 void
 Unit::setSuffix(const char *suffix)
 {
   suffix_ = suffix;
-  setScaledSuffix();
+  setScaleAbbrevSuffix();
 }
 
 void
@@ -129,31 +147,25 @@ Unit::width() const
   return digits_ + 2;
 }
 
-const char *
+std::string
 Unit::asString(float value) const
 {
   return asString(value, digits_);
 }
 
-const char *
-Unit::asString(double value) const
-{
-  return asString(static_cast<float>(value), digits_);
-}
-
-const char *
+std::string
 Unit::asString(float value,
-	       int digits) const
+               int digits) const
 {
   // Special case INF because it blows up otherwise.
-  if (abs(value) >= INF * .1)
+  if (std::abs(value) >= INF * .1)
     return (value > 0.0) ? "INF" : "-INF";
   else {
     float scaled_value = value / scale_;
     // prevent "-0.00" on slowaris
-    if (abs(scaled_value) < 1E-6)
+    if (std::abs(scaled_value) < 1E-6)
       scaled_value = 0.0;
-    return stringPrintTmp("%.*f", digits, scaled_value);
+    return sta::formatRuntime("{:.{}f}", scaled_value, digits);
   }
 }
 
@@ -172,27 +184,27 @@ Units::Units() :
 }
 
 Unit *
-Units::find(const char *unit_name)
+Units::find(std::string_view unit_name)
 {
-  if (stringEq(unit_name, "time"))
+  if (stringEqual(unit_name, "time"))
     return &time_unit_;
-  else if (stringEq(unit_name, "resistance"))
+  else if (stringEqual(unit_name, "resistance"))
     return &resistance_unit_;
-  else if (stringEq(unit_name, "capacitance"))
+  else if (stringEqual(unit_name, "capacitance"))
     return &capacitance_unit_;
-  else if (stringEq(unit_name, "voltage"))
+  else if (stringEqual(unit_name, "voltage"))
     return &voltage_unit_;
-  else if (stringEq(unit_name, "current"))
+  else if (stringEqual(unit_name, "current"))
     return &current_unit_;
-  else if (stringEq(unit_name, "power"))
+  else if (stringEqual(unit_name, "power"))
     return &power_unit_;
-  else if (stringEq(unit_name, "distance"))
+  else if (stringEqual(unit_name, "distance"))
     return &distance_unit_;
   else
     return nullptr;
 }
 
-void
+Units &
 Units::operator=(const Units &units)
 {
   time_unit_ = *units.timeUnit();
@@ -203,6 +215,7 @@ Units::operator=(const Units &units)
   power_unit_ = *units.powerUnit();
   distance_unit_ = *units.distanceUnit();
   scalar_unit_ = *units.scalarUnit();
+  return *this;
 }
 
-} // namespace
+} // namespace sta

@@ -1,5 +1,5 @@
 // OpenSTA, Static Timing Analyzer
-// Copyright (c) 2025, Parallax Software, Inc.
+// Copyright (c) 2026, Parallax Software, Inc.
 // 
 // This program is free software: you can redistribute it and/or modify
 // it under the terms of the GNU General Public License as published by
@@ -23,17 +23,16 @@
 // This notice may not be removed or altered from any source distribution.
 
 #include "PatternMatch.hh"
-#include <cstring>
+
+#include <cctype>
 #include <tcl.h>
 
 namespace sta {
 
-using std::string;
-
-PatternMatch::PatternMatch(const char *pattern,
-			   bool is_regexp,
-			   bool nocase,
-			   Tcl_Interp *interp) :
+PatternMatch::PatternMatch(std::string_view pattern,
+                           bool is_regexp,
+                           bool nocase,
+                           Tcl_Interp *interp) :
   pattern_(pattern),
   is_regexp_(is_regexp),
   nocase_(nocase),
@@ -44,7 +43,7 @@ PatternMatch::PatternMatch(const char *pattern,
     compileRegexp();
 }
 
-PatternMatch::PatternMatch(const char *pattern) :
+PatternMatch::PatternMatch(std::string_view pattern) :
   pattern_(pattern),
   is_regexp_(false),
   nocase_(false),
@@ -53,21 +52,9 @@ PatternMatch::PatternMatch(const char *pattern) :
 {
 }
 
-PatternMatch::PatternMatch(const char *pattern,
-			   const PatternMatch *inherit_from) :
+PatternMatch::PatternMatch(std::string_view pattern,
+                           const PatternMatch *inherit_from) :
   pattern_(pattern),
-  is_regexp_(inherit_from->is_regexp_),
-  nocase_(inherit_from->nocase_),
-  interp_(inherit_from->interp_),
-  regexp_(nullptr)
-{
-  if (is_regexp_)
-    compileRegexp();
-}
-
-PatternMatch::PatternMatch(const string &pattern,
-			   const PatternMatch *inherit_from) :
-  pattern_(pattern.c_str()),
   is_regexp_(inherit_from->is_regexp_),
   nocase_(inherit_from->nocase_),
   interp_(inherit_from->interp_),
@@ -83,12 +70,12 @@ PatternMatch::compileRegexp()
   int flags = TCL_REG_ADVANCED;
   if (nocase_)
     flags |= TCL_REG_NOCASE;
-  string anchored_pattern;
+  std::string anchored_pattern;
   anchored_pattern += '^';
   anchored_pattern += pattern_;
   anchored_pattern += '$';
   Tcl_Obj *pattern_obj = Tcl_NewStringObj(anchored_pattern.c_str(),
-					  anchored_pattern.size());
+                                          anchored_pattern.size());
   Tcl_IncrRefCount(pattern_obj);
   regexp_ = Tcl_GetRegExpFromObj(interp_, pattern_obj, flags);
   Tcl_DecrRefCount(pattern_obj);
@@ -97,9 +84,9 @@ PatternMatch::compileRegexp()
 }
 
 static bool
-regexpWildcards(const char *pattern)
+regexpWildcards(std::string_view pattern)
 {
-  return strpbrk(pattern, ".+*?[]") != nullptr;
+  return pattern.find_first_of(".+*?[]") != std::string_view::npos;
 }
 
 bool
@@ -112,36 +99,33 @@ PatternMatch::hasWildcards() const
 }
 
 bool
-PatternMatch::match(const string &str) const
+PatternMatch::match(std::string_view str) const
 {
-  return match(str.c_str());
+  if (regexp_) {
+    std::string buf(str);
+    const char *cstr = buf.c_str();
+    return Tcl_RegExpExec(nullptr, regexp_, cstr, cstr) == 1;
+  }
+  return patternMatch(pattern_, str);
 }
 
 bool
-PatternMatch::match(const char *str) const
+PatternMatch::matchNoCase(std::string_view str) const
 {
-  if (regexp_)
-    return Tcl_RegExpExec(nullptr, regexp_, str, str) == 1;
-  else
-    return patternMatch(pattern_, str);
-}
-
-bool
-PatternMatch::matchNoCase(const char *str) const
-{
-  if (regexp_)
-    return Tcl_RegExpExec(0, regexp_, str, str) == 1;
-  else
-    return patternMatchNoCase(pattern_, str, nocase_);
+  if (regexp_) {
+    std::string buf(str);
+    const char *cstr = buf.c_str();
+    return Tcl_RegExpExec(nullptr, regexp_, cstr, cstr) == 1;
+  }
+  return patternMatchNoCase(pattern_, str, nocase_);
 }
 
 ////////////////////////////////////////////////////////////////
 
-RegexpCompileError::RegexpCompileError(const char *pattern)  :
-  Exception()
+RegexpCompileError::RegexpCompileError(std::string_view pattern)
 {
   error_ = "TCL failed to compile regular expression '";
-  error_ += pattern;
+  error_.append(pattern.data(), pattern.size());
   error_ += "'.";
 }
 
@@ -154,70 +138,71 @@ RegexpCompileError::what() const noexcept
 ////////////////////////////////////////////////////////////////
 
 bool
-patternMatch(const char *pattern,
-	     const char *str)
+patternMatch(std::string_view pattern,
+             std::string_view str)
 {
-  const char *p = pattern;
-  const char *s = str;
-
-  while (*p && *s && (*s == *p || *p == '?')) {
-    p++;
-    s++;
+  size_t pi = 0;
+  size_t si = 0;
+  while (pi < pattern.size() && si < str.size()
+         && (str[si] == pattern[pi] || pattern[pi] == '?')) {
+    pi++;
+    si++;
   }
-  if (*p == '\0' && *s == '\0')
+  if (pi == pattern.size() && si == str.size())
     return true;
-  else if (*p == '*') {
-    if (p[1] == '\0')
+  if (pi < pattern.size() && pattern[pi] == '*') {
+    if (pi + 1 == pattern.size())
       return true;
-    while (*s) {
-      if (patternMatch(p + 1, s))
-	return true;
-      s++;
+    while (si < str.size()) {
+      if (patternMatch(pattern.substr(pi + 1), str.substr(si)))
+        return true;
+      si++;
     }
   }
   return false;
 }
 
-inline
-bool equalCase(char s,
-	       char p,
-	       bool nocase)
+static bool
+equalCase(char s,
+          char p,
+          bool nocase)
 {
   return nocase
-    ? tolower(s) == tolower(p)
+    ? std::tolower(static_cast<unsigned char>(s))
+        == std::tolower(static_cast<unsigned char>(p))
     : s == p;
 }
 
 bool
-patternMatchNoCase(const char *pattern,
-		   const char *str,
-		   bool nocase)
+patternMatchNoCase(std::string_view pattern,
+                   std::string_view str,
+                   bool nocase)
 {
-  const char *p = pattern;
-  const char *s = str;
-
-  while (*p && *s && (equalCase(*s, *p, nocase) || *p == '?')) {
-    p++;
-    s++;
+  size_t pi = 0;
+  size_t si = 0;
+  while (pi < pattern.size() && si < str.size()
+         && (equalCase(str[si], pattern[pi], nocase) || pattern[pi] == '?')) {
+    pi++;
+    si++;
   }
-  if (*p == '\0' && *s == '\0')
+  if (pi == pattern.size() && si == str.size())
     return true;
-  else if (*p == '*') {
-    if (p[1] == '\0')
+  if (pi < pattern.size() && pattern[pi] == '*') {
+    if (pi + 1 == pattern.size())
       return true;
-    while (*s) {
-      if (patternMatchNoCase(p + 1, s, nocase))
-	return true;
-      s++;
+    while (si < str.size()) {
+      if (patternMatchNoCase(pattern.substr(pi + 1), str.substr(si), nocase))
+        return true;
+      si++;
     }
   }
   return false;
 }
 
 bool
-patternWildcards(const char *pattern)
+patternWildcards(std::string_view pattern)
 {
-  return strpbrk(pattern, "*?") != 0;
+  return pattern.find_first_of("*?") != std::string_view::npos;
 }
 
-} // namespace
+} // namespace sta
