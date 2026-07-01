@@ -23,8 +23,10 @@
 // This notice may not be removed or altered from any source distribution.
 
 #include "LibertyReader.hh"
+#include "LibertyBinaryReader.hh"
 
 #include <cctype>
+#include <fstream>
 #include <cstdlib>
 #include <functional>
 #include <memory>
@@ -76,6 +78,17 @@ readLibertyFile(std::string_view filename,
                 Network *network)
 {
   LibertyReader reader(filename, infer_latches, network);
+  std::string fn(filename);
+  size_t dot = fn.find_last_of('.');
+  if (dot != std::string::npos && fn.substr(dot) == ".blib") {
+    std::ifstream stream(fn, std::ios::binary);
+    if (stream) {
+      LibertyBinaryReader bin_reader(&reader, filename, network->report());
+      if (bin_reader.read(&stream))
+        return reader.library();
+    }
+    return nullptr;
+  }
   return reader.readLibertyFile(filename);
 }
 
@@ -3184,7 +3197,11 @@ LibertyReader::makeFloatTable(const LibertyComplexAttr *values_attr,
   for (const LibertyAttrValue *value : values_attr->values()) {
     FloatSeq row;
     row.reserve(cols);
-    if (value->isString())
+    if (value->isFloatSeq()) {
+      value->fillFloatSeq(&row);
+      scaleFloats(row, scale);
+    }
+    else if (value->isString())
       row = parseFloatList(value->stringValue(), scale, values_attr->line());
     else if (value->isFloat()) {
       auto [entry, valid] = value->floatValue();
@@ -3302,7 +3319,11 @@ LibertyReader::readFloatSeq(const LibertyComplexAttr *attr,
   const LibertyAttrValueSeq &attr_values = attr->values();
   if (attr_values.size() == 1) {
     LibertyAttrValue *value = attr_values[0];
-    if (value->isString())
+    if (value->isFloatSeq()) {
+      value->fillFloatSeq(&values);
+      scaleFloats(values, scale);
+    }
+    else if (value->isString())
       values = parseFloatList(value->stringValue(), scale, attr->line());
     else {
       auto [entry, valid] = value->floatValue();
@@ -3312,7 +3333,13 @@ LibertyReader::readFloatSeq(const LibertyComplexAttr *attr,
   }
   else if (attr_values.size() > 1) {
     for (LibertyAttrValue *value : attr_values) {
-      if (value->isString()) {
+      if (value->isFloatSeq()) {
+        FloatSeq parsed;
+        value->fillFloatSeq(&parsed);
+        scaleFloats(parsed, scale);
+        values.insert(values.end(), parsed.begin(), parsed.end());
+      }
+      else if (value->isString()) {
         FloatSeq parsed = parseFloatList(value->stringValue(), scale, attr->line());
         values.insert(values.end(), parsed.begin(), parsed.end());
       }
