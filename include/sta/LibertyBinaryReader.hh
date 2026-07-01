@@ -81,6 +81,11 @@ public:
     
     // For peeking without consuming
     inline std::uint8_t peekU8() const { return *reinterpret_cast<const std::uint8_t*>(ptr_); }
+
+    // Bytes remaining before end_. Used to bounds-check reads so a malformed
+    // or foreign-format file is rejected rather than read out of bounds.
+    inline size_t remaining() const { return ptr_ < end_ ? size_t(end_ - ptr_) : 0; }
+    inline bool inBounds(size_t offset) const { return offset <= size_t(end_ - start_); }
 };
 
 class LibertyBinaryReader
@@ -102,7 +107,7 @@ private:
   void readVariable();
 
   // Helpers
-  void readStringTable();
+  bool readStringTable();
   std::string readString();
   float readFloat();
   int readInt();

@@ -50,6 +50,10 @@ LibertyBinaryReader::read(std::istream *stream)
 
   cursor_ = BinaryCursor(buffer.data(), size);
 
+  // Header is magic(8) + version(4) + string table offset(8) = 20 bytes.
+  if (size < 20)
+    return false;
+
   char magic[9];
   cursor_.readBytes(magic, 8);
   magic[8] = '\0';
@@ -59,9 +63,18 @@ LibertyBinaryReader::read(std::istream *stream)
   cursor_.readU32(); // version
   std::uint64_t string_table_offset = cursor_.readU64();
 
+  // Reject offsets outside the file (e.g. a foreign/corrupt binary format)
+  // rather than reading out of bounds.
+  if (!cursor_.inBounds(string_table_offset)) {
+    report_->error(1900, "{} is not a valid binary liberty file.",
+                   parser_.filename());
+    return false;
+  }
+
   const char *body_start = cursor_.current();
   cursor_.seek(string_table_offset);
-  readStringTable();
+  if (!readStringTable())
+    return false;
   cursor_.setPtr(body_start);
 
   while (true) {
@@ -166,13 +179,20 @@ LibertyBinaryReader::readString()
   return string_table_[index];
 }
 
-void
+bool
 LibertyBinaryReader::readStringTable()
 {
+  if (cursor_.remaining() < 4)
+    return false;
   std::uint32_t size = cursor_.readU32();
   string_table_.resize(size);
   for (std::uint32_t i = 0; i < size; i++) {
+    if (cursor_.remaining() < 4)
+      return false;
     std::uint32_t len = cursor_.readU32();
+    // len for the string bytes plus the 4-byte index that follows.
+    if (cursor_.remaining() < static_cast<size_t>(len) + 4)
+      return false;
     std::string str(len, '\0');
     cursor_.readBytes(str.data(), len);
     // The writer stores each string's dense index; place the string there
@@ -181,6 +201,7 @@ LibertyBinaryReader::readStringTable()
     if (index < string_table_.size())
       string_table_[index] = std::move(str);
   }
+  return true;
 }
 
 float
