@@ -114,5 +114,10 @@ private:
   Report *report_;
   BinaryCursor cursor_;
   std::vector<std::string> string_table_;
+  // Synthetic, monotonically increasing line numbers. The binary format has no
+  // line numbers, but LibertyReader keys maps (e.g. LibertyPortGroupMap) on
+  // group line() via LibertyGroupLineLess, so each statement needs a distinct
+  // line in read order.
+  int next_line_ = 1;
 };
 } // namespace

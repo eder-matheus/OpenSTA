@@ -95,8 +95,10 @@ LibertyBinaryReader::readGroup()
   for (std::uint32_t i = 0; i < param_count; i++)
     params->push_back(readValue());
 
-  // groupBegin takes ownership of params.
-  parser_.groupBegin(std::move(type), params, 0);
+  // groupBegin takes ownership of params. Each group gets a distinct line so
+  // LibertyReader's line-keyed maps treat sibling groups as distinct.
+  int line = next_line_++;
+  parser_.groupBegin(std::move(type), params, line);
 
   while (true) {
     std::uint8_t tag_val = cursor_.readU8();
@@ -126,7 +128,7 @@ LibertyBinaryReader::readSimpleAttr()
   readUInt32(); // Consume count (should be 1).
   LibertyAttrValue *val = readValue();
   // makeSimpleAttr copies the value, deletes it, and dispatches to the visitor.
-  parser_.makeSimpleAttr(std::move(name), val, 0);
+  parser_.makeSimpleAttr(std::move(name), val, next_line_++);
 }
 
 void
@@ -140,7 +142,7 @@ LibertyBinaryReader::readComplexAttr()
   for (std::uint32_t i = 0; i < count; i++)
     values->push_back(readValue());
   // makeComplexAttr takes ownership of the values and dispatches to the visitor.
-  parser_.makeComplexAttr(std::move(name), values, 0);
+  parser_.makeComplexAttr(std::move(name), values, next_line_++);
 }
 
 void
@@ -148,7 +150,7 @@ LibertyBinaryReader::readVariable()
 {
   std::string name = readString();
   float val = readFloat();
-  parser_.makeVariable(std::move(name), val, 0);
+  parser_.makeVariable(std::move(name), val, next_line_++);
 }
 
 std::string
