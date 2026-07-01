@@ -33,22 +33,22 @@ public:
   LibertyBinaryWriter(std::ostream *stream);
   virtual ~LibertyBinaryWriter();
 
-  virtual void begin(LibertyGroup *group);
-  virtual void end(LibertyGroup *group);
-  virtual void visitAttr(LibertyAttr *attr);
-  virtual void visitVariable(LibertyVariable *variable);
-  virtual bool save(LibertyGroup *group);
-  virtual bool save(LibertyAttr *attr);
-  virtual bool save(LibertyVariable *variable);
+  virtual void begin(const LibertyGroup *group,
+                     LibertyGroup *parent_group) override;
+  virtual void end(const LibertyGroup *group,
+                   LibertyGroup *parent_group) override;
+  virtual void visitAttr(const LibertySimpleAttr *attr) override;
+  virtual void visitAttr(const LibertyComplexAttr *attr) override;
+  virtual void visitVariable(LibertyVariable *variable) override;
   std::unordered_map<std::string, std::uint32_t>& string_table() { return string_table_; }
 
 private:
   void writeTag(std::uint8_t tag);
-  void writeString(const char *str);
+  void writeString(std::string_view str);
   void writeFloat(float val);
   void writeInt(int val);
   void writeBool(bool val);
-  void writeValue(LibertyAttrValue *value);
+  void writeValue(const LibertyAttrValue *value);
   void writeFloatSeq(const std::vector<float> &floats);
 
   std::ostream *stream_;

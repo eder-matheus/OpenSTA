@@ -31,6 +31,9 @@
 #include "LibertyBinaryWriter.hh"
 #include "Sta.hh"
 #include "Zlib.hh"
+#include "Error.hh"
+
+#include <fstream>
 
 using namespace sta;
 
