@@ -17,9 +17,11 @@
 #pragma once
 
 #include <iostream>
+#include <string>
+#include <string_view>
 #include <vector>
 #include <cstdint>
-#include <memory_resource>
+#include <cstring>
 #include "liberty/LibertyParser.hh"
 
 namespace sta {
@@ -84,17 +86,21 @@ public:
 class LibertyBinaryReader
 {
 public:
-  LibertyBinaryReader(LibertyGroupVisitor *visitor, Report *report);
+  LibertyBinaryReader(LibertyGroupVisitor *visitor,
+                      std::string_view filename,
+                      Report *report);
   virtual ~LibertyBinaryReader();
 
   bool read(std::istream *stream);
 
 private:
-  void readGroup(LibertyGroup *parent);
-  void readSimpleAttr(LibertyGroup *parent);
-  void readComplexAttr(LibertyGroup *parent);
-  void readVariable(LibertyGroup *parent);
-  
+  // Walk the binary stream, driving the parser's builder methods so the
+  // group/attribute ownership and visitor dispatch match the text reader.
+  void readGroup();
+  void readSimpleAttr();
+  void readComplexAttr();
+  void readVariable();
+
   // Helpers
   void readStringTable();
   std::string readString();
@@ -103,11 +109,10 @@ private:
   std::uint32_t readUInt32();
   bool readBool();
   LibertyAttrValue *readValue();
-  
-  LibertyGroupVisitor *visitor_;
+
+  LibertyParser parser_;
   Report *report_;
   BinaryCursor cursor_;
-  std::vector<LibertyStmt*> stmts_; // To manage memory of created stmts if not saved
   std::vector<std::string> string_table_;
 };
 } // namespace
