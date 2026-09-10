@@ -137,16 +137,7 @@ write_liberty_cmd(LibertyLibrary *library,
 }
 
 void write_liberty_binary_cmd(const char *in_filename, const char *out_filename) {
-  gzstream::igzstream in_stream(in_filename);
-  if (!in_stream.good()) {
-    throw FileNotReadable(in_filename);
-  }
-  std::ofstream out_stream(out_filename, std::ios::binary);
-
-  if (!out_stream) {
-    throw FileNotWritable(out_filename);
-  }
-  writeLibertyBinary(&in_stream, &out_stream, Sta::sta()->report());
+  writeLibertyBinary(in_filename, out_filename, Sta::sta()->report());
 }
 
 void

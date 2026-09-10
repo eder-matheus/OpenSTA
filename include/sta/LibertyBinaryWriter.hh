@@ -59,8 +59,8 @@ private:
 };
 
 void
-writeLibertyBinary(std::istream *in_stream,
-                   std::ostream *out_stream,
+writeLibertyBinary(const char *in_filename,
+                   const char *out_filename,
                    Report *report);
 
 } // namespace

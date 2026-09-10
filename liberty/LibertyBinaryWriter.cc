@@ -21,9 +21,11 @@
 #include "sta/Error.hh"
 
 #include <cctype>
+#include <cstdio>
 #include <cstring>
 #include <cstdint>
 #include <cstdlib>
+#include <fstream>
 #include <vector>
 
 namespace {
@@ -56,44 +58,61 @@ parseOptimisticFloatSeq(const std::string &str, std::vector<float> &floats)
 namespace sta {
 
 void
-writeLibertyBinary(std::istream *in_stream,
-                   std::ostream *out_stream,
+writeLibertyBinary(const char *in_filename,
+                   const char *out_filename,
                    Report *report)
 {
-  LibertyBinaryWriter writer(out_stream);
-  // Write Magic and Version.
-  out_stream->write(LIBERTY_BINARY_MAGIC, 8);
-  uint32_t version = 1;
-  out_stream->write(reinterpret_cast<const char*>(&version), sizeof(version));
-  uint64_t string_table_offset = 0;
-  uint64_t string_table_offset_location = out_stream->tellp();
-  out_stream->write(reinterpret_cast<const char*>(&string_table_offset),
-                    sizeof(string_table_offset));
+  std::ofstream out_stream(out_filename, std::ios::binary);
+  if (!out_stream)
+    throw FileNotWritable(out_filename);
 
-  parseLibertyFile(in_stream, "stream", &writer, report);
+  try {
+    LibertyBinaryWriter writer(&out_stream);
+    // Write Magic and Version.
+    out_stream.write(LIBERTY_BINARY_MAGIC, 8);
+    uint32_t version = 1;
+    out_stream.write(reinterpret_cast<const char*>(&version), sizeof(version));
+    uint64_t string_table_offset = 0;
+    uint64_t string_table_offset_location = out_stream.tellp();
+    out_stream.write(reinterpret_cast<const char*>(&string_table_offset),
+                     sizeof(string_table_offset));
 
-  // Write EOF tag.
-  uint8_t eof_tag = static_cast<uint8_t>(LibertyBinaryTag::EOF_TAG);
-  out_stream->write(reinterpret_cast<const char*>(&eof_tag), sizeof(eof_tag));
+    parseLibertyFile(in_filename, &writer, report);
 
-  // Backpatch the string table offset.
-  string_table_offset = out_stream->tellp();
-  out_stream->seekp(string_table_offset_location, out_stream->beg);
-  out_stream->write(reinterpret_cast<const char*>(&string_table_offset),
-                    sizeof(string_table_offset));
+    // Write EOF tag.
+    uint8_t eof_tag = static_cast<uint8_t>(LibertyBinaryTag::EOF_TAG);
+    out_stream.write(reinterpret_cast<const char*>(&eof_tag), sizeof(eof_tag));
 
-  // Write the string table at the end of the file.
-  out_stream->seekp(0, out_stream->end);
-  uint32_t string_table_size = writer.string_table().size();
-  out_stream->write(reinterpret_cast<const char*>(&string_table_size),
-                    sizeof(string_table_size));
-  for (const auto &entry : writer.string_table()) {
-    uint32_t string_length = entry.first.size();
-    out_stream->write(reinterpret_cast<const char*>(&string_length),
-                      sizeof(string_length));
-    out_stream->write(entry.first.c_str(), entry.first.size());
-    out_stream->write(reinterpret_cast<const char*>(&entry.second),
-                      sizeof(entry.second));
+    // Backpatch the string table offset.
+    string_table_offset = out_stream.tellp();
+    out_stream.seekp(string_table_offset_location, out_stream.beg);
+    out_stream.write(reinterpret_cast<const char*>(&string_table_offset),
+                     sizeof(string_table_offset));
+
+    // Write the string table at the end of the file.
+    out_stream.seekp(0, out_stream.end);
+    uint32_t string_table_size = writer.string_table().size();
+    out_stream.write(reinterpret_cast<const char*>(&string_table_size),
+                     sizeof(string_table_size));
+    for (const auto &entry : writer.string_table()) {
+      uint32_t string_length = entry.first.size();
+      out_stream.write(reinterpret_cast<const char*>(&string_length),
+                       sizeof(string_length));
+      out_stream.write(entry.first.c_str(), entry.first.size());
+      out_stream.write(reinterpret_cast<const char*>(&entry.second),
+                       sizeof(entry.second));
+    }
+
+    // A failed write (e.g. disk full) silently poisons the stream, so check
+    // once at the end rather than reporting success for a corrupt file.
+    if (!out_stream.good())
+      report->error(1901, "error writing {}.", out_filename);
+  }
+  catch (...) {
+    // Don't leave behind a partial file with a valid magic number.
+    out_stream.close();
+    std::remove(out_filename);
+    throw;
   }
 }
 
