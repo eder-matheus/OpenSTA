@@ -53,6 +53,17 @@ parseOptimisticFloatSeq(const std::string &str, std::vector<float> &floats)
   }
   return has_float;
 }
+
+// Only table-style attributes are converted to native floats. Converting any
+// numeric-looking string would change the type of values whose consumers
+// need a string (e.g. a mode named "1" or a bundle member named "INF").
+bool
+isFloatSeqAttr(const std::string &name)
+{
+  return name == "values"
+    || name.starts_with("index_");
+}
+
 } // namespace
 
 namespace sta {
@@ -175,20 +186,16 @@ LibertyBinaryWriter::visitAttr(const LibertyComplexAttr *attr)
   const LibertyAttrValueSeq &values = attr->values();
   uint32_t count = values.size();
   stream_->write(reinterpret_cast<const char*>(&count), sizeof(count));
+  bool float_seq_attr = isFloatSeqAttr(attr->name());
+  std::vector<float> float_values;
   for (const LibertyAttrValue *val : values) {
-    if (val->isString()) {
-      std::vector<float> float_values;
-      if (parseOptimisticFloatSeq(val->stringValue(), float_values)) {
-        if (float_values.size() == 1) {
-          LibertyAttrValue float_val(float_values[0]);
-          writeValue(&float_val);
-          continue;
-        }
-        LibertyAttrValue float_seq_val(std::move(float_values));
-        writeValue(&float_seq_val);
-      }
+    if (float_seq_attr
+        && val->isString()
+        && parseOptimisticFloatSeq(val->stringValue(), float_values)) {
+      if (float_values.size() == 1)
+        writeFloat(float_values[0]);
       else
-        writeValue(val);
+        writeFloatSeq(float_values);
     }
     else
       writeValue(val);
