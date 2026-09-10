@@ -93,7 +93,16 @@ proc write_liberty { args } {
   write_liberty_cmd $library $filename
 }
 
-define_cmd_args "write_liberty_binary" {in_filename out_filename}
+define_cmd_args "write_liberty_binary" {in_filename out_filename} \
+  -help {Translate a Liberty format library file into a binary liberty (.blib) file.
+
+The input file is parsed but not loaded as a library. The `read_liberty` command loads a .blib file faster than the text format.
+
+Files compressed with gzip are automatically uncompressed.} \
+  -arg_help {
+    in_filename {The Liberty file name to read.}
+    out_filename {The binary liberty file name to write. Use the .blib file extension so `read_liberty` recognizes the file as binary liberty.}
+  }
 
 proc write_liberty_binary { args } {
   check_argc_eq2 "write_liberty_binary" $args
