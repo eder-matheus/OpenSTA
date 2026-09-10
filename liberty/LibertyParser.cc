@@ -41,6 +41,18 @@
 
 namespace sta {
 
+static void
+parseLibertyStream(std::istream *stream,
+                   std::string_view filename,
+                   LibertyGroupVisitor *library_visitor,
+                   Report *report)
+{
+  LibertyParser reader(filename, library_visitor, report);
+  LibertyScanner scanner(stream, filename, &reader, report);
+  LibertyParse parser(&scanner, &reader);
+  parser.parse();
+}
+
 void
 parseLibertyFile(std::string_view filename,
                  LibertyGroupVisitor *library_visitor,
@@ -50,19 +62,7 @@ parseLibertyFile(std::string_view filename,
   gzstream::igzstream stream(fn.c_str());
   if (!stream.is_open())
     throw FileNotReadable(filename);
-  parseLibertyFile(&stream, filename, library_visitor, report);
-}
-
-void
-parseLibertyFile(std::istream *stream,
-                 std::string_view filename,
-                 LibertyGroupVisitor *library_visitor,
-                 Report *report)
-{
-  LibertyParser reader(filename, library_visitor, report);
-  LibertyScanner scanner(stream, filename, &reader, report);
-  LibertyParse parser(&scanner, &reader);
-  parser.parse();
+  parseLibertyStream(&stream, filename, library_visitor, report);
 }
 
 LibertyParser::LibertyParser(std::string_view filename,
@@ -193,7 +193,7 @@ LibertyParser::makeSimpleAttr(std::string &&name,
 
 LibertyComplexAttr *
 LibertyParser::makeComplexAttr(std::string &&name,
-                               const LibertyAttrValueSeq *values,
+                               LibertyAttrValueSeq *values,
                                int line)
 {
   // Defines have the same syntax as complex attributes.
@@ -203,7 +203,8 @@ LibertyParser::makeComplexAttr(std::string &&name,
     return nullptr;  // Define is not a complex attr; already added to group
   }
   else {
-    LibertyComplexAttr *attr = new LibertyComplexAttr(std::move(name), *values, line);
+    LibertyComplexAttr *attr = new LibertyComplexAttr(std::move(name),
+                                                      std::move(*values), line);
     delete values;
     LibertyGroup *group = this->group();
     group->addAttr(attr);
@@ -234,6 +235,12 @@ LibertyAttrValue *
 LibertyParser::makeAttrValueFloat(float value)
 {
   return new LibertyAttrValue(value);
+}
+
+LibertyAttrValue *
+LibertyParser::makeAttrValueFloatSeq(std::vector<float> &&values)
+{
+  return new LibertyAttrValue(std::move(values));
 }
 
 ////////////////////////////////////////////////////////////////
@@ -607,12 +614,6 @@ LibertyAttrValue::floatValue() const
     return {float_value_, true};
   else
     return stringFloat(string_value_);
-}
-
-void
-LibertyAttrValue::fillFloatSeq(std::vector<float> *seq) const
-{
-  seq->insert(seq->end(), float_seq_.begin(), float_seq_.end());
 }
 
 ////////////////////////////////////////////////////////////////

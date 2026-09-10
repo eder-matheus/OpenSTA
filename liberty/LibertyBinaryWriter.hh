@@ -19,7 +19,8 @@
 #include <cstdint>
 #include <iosfwd>
 #include <unordered_map>
-#include "liberty/LibertyParser.hh"
+#include "LibertyBinaryCommon.hh"
+#include "LibertyParser.hh"
 
 namespace sta {
 
@@ -38,7 +39,7 @@ class LibertyBinaryWriter : public LibertyGroupVisitor
 {
 public:
   LibertyBinaryWriter(std::ostream *stream);
-  virtual ~LibertyBinaryWriter();
+  virtual ~LibertyBinaryWriter() = default;
 
   virtual void begin(const LibertyGroup *group,
                      LibertyGroup *parent_group) override;
@@ -50,7 +51,8 @@ public:
   const LibertyStringTable &string_table() const { return string_table_; }
 
 private:
-  void writeTag(std::uint8_t tag);
+  void writeTag(LibertyBinaryTag tag);
+  void writeType(LibertyBinaryValueType type);
   void writeString(std::string_view str);
   void writeFloat(float val);
   void writeValue(const LibertyAttrValue *value);

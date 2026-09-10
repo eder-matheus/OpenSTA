@@ -22,7 +22,6 @@
 
 #include <cctype>
 #include <cstdio>
-#include <cstring>
 #include <cstdint>
 #include <cstdlib>
 #include <fstream>
@@ -48,7 +47,6 @@ parseOptimisticFloatSeq(const std::string &str, std::vector<float> &floats)
   floats.clear();
   const char *p = str.c_str();
   char *end;
-  bool has_float = false;
   while (*p) {
     while (*p && (isspace(static_cast<unsigned char>(*p)) || *p == ',' || *p == '\"'
                   || *p == '{' || *p == '}'))
@@ -59,10 +57,9 @@ parseOptimisticFloatSeq(const std::string &str, std::vector<float> &floats)
     if (p == end)
       return false; // Not a float list.
     floats.push_back(f);
-    has_float = true;
     p = end;
   }
-  return has_float;
+  return !floats.empty();
 }
 
 // Only table-style attributes are converted to native floats. Converting any
@@ -101,8 +98,7 @@ writeLibertyBinary(const char *in_filename,
     parseLibertyFile(in_filename, &writer, report);
 
     // Write EOF tag.
-    uint8_t eof_tag = static_cast<uint8_t>(LibertyBinaryTag::EOF_TAG);
-    writeRaw(&out_stream, eof_tag);
+    writeRaw(&out_stream, static_cast<uint8_t>(LibertyBinaryTag::EOF_TAG));
 
     // Backpatch the string table offset.
     string_table_offset = out_stream.tellp();
@@ -138,16 +134,12 @@ LibertyBinaryWriter::LibertyBinaryWriter(std::ostream *stream) :
 {
 }
 
-LibertyBinaryWriter::~LibertyBinaryWriter()
-{
-}
-
 void
 LibertyBinaryWriter::begin(const LibertyGroup *group,
                            LibertyGroup *)
 {
   depth_++;
-  writeTag(static_cast<uint8_t>(LibertyBinaryTag::GROUP_BEGIN));
+  writeTag(LibertyBinaryTag::GROUP_BEGIN);
   writeString(group->type());
 
   const LibertyAttrValueSeq &params = group->params();
@@ -161,7 +153,7 @@ void
 LibertyBinaryWriter::end(const LibertyGroup *group,
                          LibertyGroup *parent_group)
 {
-  writeTag(static_cast<uint8_t>(LibertyBinaryTag::GROUP_END));
+  writeTag(LibertyBinaryTag::GROUP_END);
   depth_--;
   // LibertyParser retains the whole group tree as it parses. Once a top-level
   // group (a cell, table template, etc. directly under the library) has been
@@ -169,18 +161,18 @@ LibertyBinaryWriter::end(const LibertyGroup *group,
   // peak memory. This mirrors LibertyReader::endCell clearing library_group,
   // and lets large libraries stream with ~one-cell memory instead of holding
   // the entire (uncompressed) file in RAM.
-  if (depth_ == 1 && parent_group)
+  if (depth_ == 1)
     parent_group->clear();
   // The parser pops the library group with no owner and the visitor is the
   // last to see it; the text reader's endLibrary deletes it the same way.
-  else if (depth_ == 0)
+  else if (!parent_group)
     delete group;
 }
 
 void
 LibertyBinaryWriter::visitAttr(const LibertySimpleAttr *attr)
 {
-  writeTag(static_cast<uint8_t>(LibertyBinaryTag::ATTR_SIMPLE));
+  writeTag(LibertyBinaryTag::ATTR_SIMPLE);
   writeString(attr->name());
   uint32_t count = 1;
   writeRaw(stream_, count);
@@ -190,7 +182,7 @@ LibertyBinaryWriter::visitAttr(const LibertySimpleAttr *attr)
 void
 LibertyBinaryWriter::visitAttr(const LibertyComplexAttr *attr)
 {
-  writeTag(static_cast<uint8_t>(LibertyBinaryTag::ATTR_COMPLEX));
+  writeTag(LibertyBinaryTag::ATTR_COMPLEX);
   writeString(attr->name());
 
   const LibertyAttrValueSeq &values = attr->values();
@@ -215,22 +207,27 @@ LibertyBinaryWriter::visitAttr(const LibertyComplexAttr *attr)
 void
 LibertyBinaryWriter::visitVariable(LibertyVariable *variable)
 {
-  writeTag(static_cast<uint8_t>(LibertyBinaryTag::VARIABLE));
+  writeTag(LibertyBinaryTag::VARIABLE);
   writeString(variable->variable());
   writeFloat(variable->value());
 }
 
 void
-LibertyBinaryWriter::writeTag(uint8_t tag)
+LibertyBinaryWriter::writeTag(LibertyBinaryTag tag)
 {
-  writeRaw(stream_, tag);
+  writeRaw(stream_, static_cast<uint8_t>(tag));
+}
+
+void
+LibertyBinaryWriter::writeType(LibertyBinaryValueType type)
+{
+  writeRaw(stream_, static_cast<uint8_t>(type));
 }
 
 void
 LibertyBinaryWriter::writeString(std::string_view str)
 {
-  uint8_t type = static_cast<uint8_t>(LibertyBinaryValueType::STRING);
-  writeRaw(stream_, type);
+  writeType(LibertyBinaryValueType::STRING);
 
   // Heterogeneous find so table hits (the common case) don't allocate a key.
   auto it = string_table_.find(str);
@@ -247,8 +244,7 @@ LibertyBinaryWriter::writeString(std::string_view str)
 void
 LibertyBinaryWriter::writeFloat(float val)
 {
-  uint8_t type = static_cast<uint8_t>(LibertyBinaryValueType::FLOAT);
-  writeRaw(stream_, type);
+  writeType(LibertyBinaryValueType::FLOAT);
   writeRaw(stream_, val);
 }
 
@@ -257,22 +253,16 @@ LibertyBinaryWriter::writeValue(const LibertyAttrValue *value)
 {
   if (value->isString())
     writeString(value->stringValue());
-  else if (value->isFloatSeq()) {
-    std::vector<float> floats;
-    value->fillFloatSeq(&floats);
-    writeFloatSeq(floats);
-  }
-  else if (value->isFloat()) {
-    auto [val, exists] = value->floatValue();
-    writeFloat(val);
-  }
+  else if (value->isFloatSeq())
+    writeFloatSeq(value->floatSeq());
+  else if (value->isFloat())
+    writeFloat(value->floatValue().first);
 }
 
 void
 LibertyBinaryWriter::writeFloatSeq(const std::vector<float> &floats)
 {
-  uint8_t type = static_cast<uint8_t>(LibertyBinaryValueType::FLOAT_SEQ);
-  writeRaw(stream_, type);
+  writeType(LibertyBinaryValueType::FLOAT_SEQ);
   uint32_t count = floats.size();
   writeRaw(stream_, count);
   if (count > 0)

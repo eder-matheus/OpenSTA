@@ -21,7 +21,7 @@
 namespace sta {
 
 // Magic number for binary liberty files: "STALIB01"
-static const char *LIBERTY_BINARY_MAGIC = "STALIB01";
+inline constexpr char LIBERTY_BINARY_MAGIC[] = "STALIB01";
 
 enum class LibertyBinaryTag : uint8_t {
   GROUP_BEGIN = 1,
@@ -36,8 +36,8 @@ enum class LibertyBinaryTag : uint8_t {
 enum class LibertyBinaryValueType : uint8_t {
   STRING = 1,
   FLOAT = 2,
-  INT = 3,
-  BOOLEAN = 4,
+  INT = 3,     // Reserved; no writer emits it.
+  BOOLEAN = 4, // Reserved; no writer emits it.
   FLOAT_SEQ = 5
 };
 

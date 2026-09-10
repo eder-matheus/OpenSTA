@@ -28,12 +28,8 @@
 #include "Liberty.hh"
 #include "EquivCells.hh"
 #include "LibertyWriter.hh"
-#include "LibertyBinaryWriter.hh"
+#include "liberty/LibertyBinaryWriter.hh"
 #include "Sta.hh"
-#include "Zlib.hh"
-#include "Error.hh"
-
-#include <fstream>
 
 using namespace sta;
 

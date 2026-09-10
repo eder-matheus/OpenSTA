@@ -71,7 +71,8 @@ namespace sta {
 
 static void
 scaleFloats(FloatSeq &floats,
-            float scale);
+            float scale,
+            size_t first = 0);
 
 LibertyLibrary *
 readLibertyFile(std::string_view filename,
@@ -630,10 +631,11 @@ LibertyReader::makeTableTemplateAxis(const LibertyGroup *template_group,
 
 static void
 scaleFloats(FloatSeq &floats,
-            float scale)
+            float scale,
+            size_t first)
 {
   size_t count = floats.size();
-  for (size_t i = 0; i < count; i++)
+  for (size_t i = first; i < count; i++)
     floats[i] *= scale;
 }
 
@@ -3249,9 +3251,8 @@ LibertyReader::makeFloatTable(const LibertyComplexAttr *values_attr,
   table.reserve(rows);
   for (const LibertyAttrValue *value : values_attr->values()) {
     FloatSeq row;
-    row.reserve(cols);
     if (value->isFloatSeq()) {
-      value->fillFloatSeq(&row);
+      row = value->floatSeq();
       scaleFloats(row, scale);
     }
     else if (value->isString())
@@ -3373,7 +3374,7 @@ LibertyReader::readFloatSeq(const LibertyComplexAttr *attr,
   if (attr_values.size() == 1) {
     LibertyAttrValue *value = attr_values[0];
     if (value->isFloatSeq()) {
-      value->fillFloatSeq(&values);
+      values = value->floatSeq();
       scaleFloats(values, scale);
     }
     else if (value->isString())
@@ -3387,11 +3388,10 @@ LibertyReader::readFloatSeq(const LibertyComplexAttr *attr,
   else if (attr_values.size() > 1) {
     for (LibertyAttrValue *value : attr_values) {
       if (value->isFloatSeq()) {
-        // fillFloatSeq appends, so scale just the appended range.
         size_t first = values.size();
-        value->fillFloatSeq(&values);
-        for (size_t i = first; i < values.size(); i++)
-          values[i] *= scale;
+        const FloatSeq &seq = value->floatSeq();
+        values.insert(values.end(), seq.begin(), seq.end());
+        scaleFloats(values, scale, first);
       }
       else if (value->isString()) {
         FloatSeq parsed = parseFloatList(value->stringValue(), scale, attr->line());

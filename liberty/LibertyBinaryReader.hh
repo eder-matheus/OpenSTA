@@ -22,12 +22,9 @@
 #include <vector>
 #include <cstdint>
 #include <cstring>
-#include "liberty/LibertyParser.hh"
+#include "LibertyParser.hh"
 
 namespace sta {
-
-class LibertyGroupVisitor;
-class Report;
 
 // Unchecked read primitives; LibertyBinaryReader bounds-checks with
 // remaining()/inBounds() before every read so a malformed or foreign-format
@@ -74,9 +71,6 @@ public:
 
     inline const char* current() const { return ptr_; }
 
-    // For peeking without consuming
-    inline std::uint8_t peekU8() const { return *reinterpret_cast<const std::uint8_t*>(ptr_); }
-
     inline size_t remaining() const { return ptr_ < end_ ? size_t(end_ - ptr_) : 0; }
     inline bool inBounds(size_t offset) const { return offset <= size_t(end_ - start_); }
 };
@@ -87,7 +81,7 @@ public:
   LibertyBinaryReader(LibertyGroupVisitor *visitor,
                       std::string_view filename,
                       Report *report);
-  virtual ~LibertyBinaryReader();
+  ~LibertyBinaryReader() = default;
 
   // Errors on a malformed file rather than returning.
   void read(std::istream *stream);
@@ -104,17 +98,22 @@ private:
 
   // Helpers
   void readStringTable();
+  // Type-tagged reads for structural fields.
   std::string readString();
   float readFloat();
   std::uint32_t readUInt32();
+  // Payload reads; readValue has already consumed the type tag.
+  std::string readStringIndex();
+  float readFloatValue();
   LibertyAttrValue *readValue();
+  // Counted value sequence; returns nullptr instead of allocating when empty.
+  LibertyAttrValueSeq *readValues();
   // Error unless bytes remain before the end of the buffer.
   void require(size_t bytes);
   // Report::error throws, so this does not return.
   void corruptError();
 
   LibertyParser parser_;
-  Report *report_;
   BinaryCursor cursor_;
   std::vector<std::string> string_table_;
   // Synthetic, monotonically increasing line numbers. The binary format has no

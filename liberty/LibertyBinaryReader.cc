@@ -19,9 +19,9 @@
 #include "LibertyParser.hh"
 #include "Report.hh"
 
-#include <cstring>
 #include <istream>
 #include <memory>
+#include <string_view>
 #include <vector>
 
 namespace sta {
@@ -37,20 +37,15 @@ LibertyBinaryReader::LibertyBinaryReader(LibertyGroupVisitor *visitor,
                                          std::string_view filename,
                                          Report *report) :
   parser_(filename, visitor, report),
-  report_(report),
   cursor_(nullptr, 0)
-{
-}
-
-LibertyBinaryReader::~LibertyBinaryReader()
 {
 }
 
 void
 LibertyBinaryReader::corruptError()
 {
-  report_->error(1900, "{} is not a valid binary liberty file.",
-                 parser_.filename());
+  parser_.report()->error(1900, "{} is not a valid binary liberty file.",
+                          parser_.filename());
 }
 
 void
@@ -80,10 +75,9 @@ LibertyBinaryReader::read(std::istream *stream)
 
   cursor_ = BinaryCursor(buffer.get(), size);
 
-  char magic[9];
+  char magic[8];
   cursor_.readBytes(magic, 8);
-  magic[8] = '\0';
-  if (strcmp(magic, LIBERTY_BINARY_MAGIC) != 0)
+  if (std::string_view(magic, 8) != LIBERTY_BINARY_MAGIC)
     corruptError();
 
   cursor_.readU32(); // version
@@ -134,17 +128,10 @@ void
 LibertyBinaryReader::readGroup()
 {
   std::string type = readString();
-  std::uint32_t param_count = readUInt32();
-  if (param_count > cursor_.remaining() / min_value_size)
-    corruptError();
-
-  LibertyAttrValueSeq *params = new LibertyAttrValueSeq;
-  params->reserve(param_count);
-  for (std::uint32_t i = 0; i < param_count; i++)
-    params->push_back(readValue());
-
-  // groupBegin takes ownership of params. Each group gets a distinct line so
-  // LibertyReader's line-keyed maps treat sibling groups as distinct.
+  // groupBegin takes ownership of the params (nullptr when there are none).
+  // Each group gets a distinct line so LibertyReader's line-keyed maps treat
+  // sibling groups as distinct.
+  LibertyAttrValueSeq *params = readValues();
   int line = next_line_++;
   parser_.groupBegin(std::move(type), params, line);
 
@@ -167,14 +154,9 @@ void
 LibertyBinaryReader::readComplexAttr()
 {
   std::string name = readString();
-  std::uint32_t count = readUInt32();
-  if (count > cursor_.remaining() / min_value_size)
-    corruptError();
-
-  LibertyAttrValueSeq *values = new LibertyAttrValueSeq;
-  values->reserve(count);
-  for (std::uint32_t i = 0; i < count; i++)
-    values->push_back(readValue());
+  LibertyAttrValueSeq *values = readValues();
+  if (!values)
+    values = new LibertyAttrValueSeq;
   // makeComplexAttr takes ownership of the values and dispatches to the visitor.
   parser_.makeComplexAttr(std::move(name), values, next_line_++);
 }
@@ -187,14 +169,36 @@ LibertyBinaryReader::readVariable()
   parser_.makeVariable(std::move(name), val, next_line_++);
 }
 
+LibertyAttrValueSeq *
+LibertyBinaryReader::readValues()
+{
+  std::uint32_t count = readUInt32();
+  if (count == 0)
+    return nullptr;
+  if (count > cursor_.remaining() / min_value_size)
+    corruptError();
+
+  LibertyAttrValueSeq *values = new LibertyAttrValueSeq;
+  values->reserve(count);
+  for (std::uint32_t i = 0; i < count; i++)
+    values->push_back(readValue());
+  return values;
+}
+
 std::string
 LibertyBinaryReader::readString()
 {
-  require(min_value_size);
-  std::uint8_t type = cursor_.readU8();
-  if (static_cast<LibertyBinaryValueType>(type) != LibertyBinaryValueType::STRING)
+  require(1);
+  if (static_cast<LibertyBinaryValueType>(cursor_.readU8())
+      != LibertyBinaryValueType::STRING)
     corruptError();
+  return readStringIndex();
+}
 
+std::string
+LibertyBinaryReader::readStringIndex()
+{
+  require(4);
   std::uint32_t index = cursor_.readU32();
   if (index >= string_table_.size())
     corruptError();
@@ -215,24 +219,31 @@ LibertyBinaryReader::readStringTable()
     std::uint32_t len = cursor_.readU32();
     // len for the string bytes plus the 4-byte index that follows.
     require(static_cast<size_t>(len) + 4);
-    std::string str(len, '\0');
-    cursor_.readBytes(str.data(), len);
+    const char *bytes = cursor_.current();
+    cursor_.setPtr(bytes + len);
     // The writer stores each string's dense index; place the string there
     // because the writer iterates an unordered_map in arbitrary order.
     std::uint32_t index = cursor_.readU32();
     if (index >= string_table_.size())
       corruptError();
-    string_table_[index] = std::move(str);
+    string_table_[index].assign(bytes, len);
   }
 }
 
 float
 LibertyBinaryReader::readFloat()
 {
-  require(min_value_size);
-  std::uint8_t type = cursor_.readU8();
-  if (static_cast<LibertyBinaryValueType>(type) != LibertyBinaryValueType::FLOAT)
+  require(1);
+  if (static_cast<LibertyBinaryValueType>(cursor_.readU8())
+      != LibertyBinaryValueType::FLOAT)
     corruptError();
+  return readFloatValue();
+}
+
+float
+LibertyBinaryReader::readFloatValue()
+{
+  require(4);
   return cursor_.readFloat();
 }
 
@@ -247,23 +258,21 @@ LibertyAttrValue *
 LibertyBinaryReader::readValue()
 {
   require(1);
-  std::uint8_t type = cursor_.peekU8();
-  LibertyBinaryValueType val_type = static_cast<LibertyBinaryValueType>(type);
+  LibertyBinaryValueType val_type =
+    static_cast<LibertyBinaryValueType>(cursor_.readU8());
 
-  if (val_type == LibertyBinaryValueType::STRING) {
-    std::string str = readString();
-    return new LibertyAttrValue(std::move(str));
-  }
+  if (val_type == LibertyBinaryValueType::STRING)
+    return parser_.makeAttrValueString(readStringIndex());
   else if (val_type == LibertyBinaryValueType::FLOAT)
-    return new LibertyAttrValue(readFloat());
+    return parser_.makeAttrValueFloat(readFloatValue());
   else if (val_type == LibertyBinaryValueType::FLOAT_SEQ) {
-    cursor_.readU8(); // type byte
     std::uint32_t count = readUInt32();
     require(static_cast<size_t>(count) * sizeof(float));
-    std::vector<float> seq(count);
-    cursor_.readBytes(reinterpret_cast<char*>(seq.data()),
-                      static_cast<size_t>(count) * sizeof(float));
-    return new LibertyAttrValue(std::move(seq));
+    // Range construction copies in one pass, without vector's zero fill.
+    const float *floats = reinterpret_cast<const float*>(cursor_.current());
+    std::vector<float> seq(floats, floats + count);
+    cursor_.setPtr(cursor_.current() + count * sizeof(float));
+    return parser_.makeAttrValueFloatSeq(std::move(seq));
   }
   corruptError();
   return nullptr; // Unreachable; corruptError throws.

@@ -25,7 +25,6 @@
 #pragma once
 
 #include <functional>
-#include <iosfwd>
 #include <string_view>
 #include <vector>
 #include <map>
@@ -85,10 +84,11 @@ public:
                                     LibertyAttrValue *value,
                                     int line);
   LibertyComplexAttr *makeComplexAttr(std::string &&name,
-                                     const LibertyAttrValueSeq *values,
+                                     LibertyAttrValueSeq *values,
                                      int line);
   LibertyAttrValue *makeAttrValueString(std::string &&value);
   LibertyAttrValue *makeAttrValueFloat(float value);
+  LibertyAttrValue *makeAttrValueFloatSeq(std::vector<float> &&values);
   LibertyVariable *makeVariable(std::string &&var,
                                 float value,
                                 int line);
@@ -111,8 +111,7 @@ public:
   bool isFloat() const;
   bool isFloatSeq() const;
   std::pair<float, bool> floatValue() const;
-  // Append this value's floats to seq.
-  void fillFloatSeq(std::vector<float> *seq) const;
+  const std::vector<float> &floatSeq() const { return float_seq_; }
   const std::string &stringValue() const { return string_value_; }
   std::string &stringValue() { return string_value_; }
 
@@ -285,14 +284,6 @@ public:
 
 void
 parseLibertyFile(std::string_view filename,
-                 LibertyGroupVisitor *library_visitor,
-                 Report *report);
-
-// Parse liberty from an already-open stream (used by the binary writer
-// to read a text liberty file without reopening it).
-void
-parseLibertyFile(std::istream *stream,
-                 std::string_view filename,
                  LibertyGroupVisitor *library_visitor,
                  Report *report);
 } // namespace sta
