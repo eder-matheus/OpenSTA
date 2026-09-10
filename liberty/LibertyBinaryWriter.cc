@@ -152,7 +152,7 @@ LibertyBinaryWriter::begin(const LibertyGroup *group,
 }
 
 void
-LibertyBinaryWriter::end(const LibertyGroup *,
+LibertyBinaryWriter::end(const LibertyGroup *group,
                          LibertyGroup *parent_group)
 {
   writeTag(static_cast<uint8_t>(LibertyBinaryTag::GROUP_END));
@@ -165,6 +165,10 @@ LibertyBinaryWriter::end(const LibertyGroup *,
   // the entire (uncompressed) file in RAM.
   if (depth_ == 1 && parent_group)
     parent_group->clear();
+  // The parser pops the library group with no owner and the visitor is the
+  // last to see it; the text reader's endLibrary deletes it the same way.
+  else if (depth_ == 0)
+    delete group;
 }
 
 void
