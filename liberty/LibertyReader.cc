@@ -38,6 +38,7 @@
 #include "ConcreteLibrary.hh"
 #include "ContainerHelpers.hh"
 #include "Debug.hh"
+#include "Error.hh"
 #include "EnumNameMap.hh"
 #include "EquivCells.hh"
 #include "Format.hh"
@@ -78,16 +79,14 @@ readLibertyFile(std::string_view filename,
                 Network *network)
 {
   LibertyReader reader(filename, infer_latches, network);
-  std::string fn(filename);
-  size_t dot = fn.find_last_of('.');
-  if (dot != std::string::npos && fn.substr(dot) == ".blib") {
-    std::ifstream stream(fn, std::ios::binary);
-    if (stream) {
-      LibertyBinaryReader bin_reader(&reader, filename, network->report());
-      if (bin_reader.read(&stream))
-        return reader.library();
-    }
-    return nullptr;
+  if (filename.ends_with(".blib")) {
+    std::ifstream stream(std::string(filename), std::ios::binary);
+    if (!stream)
+      throw FileNotReadable(filename);
+    LibertyBinaryReader bin_reader(&reader, filename, network->report());
+    // Errors on a malformed file.
+    bin_reader.read(&stream);
+    return reader.library();
   }
   return reader.readLibertyFile(filename);
 }
