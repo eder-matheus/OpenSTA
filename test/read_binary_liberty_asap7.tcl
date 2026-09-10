@@ -1,1 +1,0 @@
-read_liberty /tmp/tsmc2.blib

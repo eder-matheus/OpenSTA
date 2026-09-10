@@ -153,6 +153,7 @@ record_public_tests {
   liberty_arcs_one2one_1
   liberty_arcs_one2one_2
   liberty_backslash_eol
+  liberty_binary
   liberty_ccsn
   liberty_float_as_str
   liberty_latch3
