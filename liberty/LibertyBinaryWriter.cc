@@ -29,6 +29,17 @@
 #include <vector>
 
 namespace {
+
+// Write a scalar's raw little-endian bytes. Centralizes the cast/sizeof
+// pairing so a mismatched address/size cannot creep into one call site.
+template <typename T>
+void
+writeRaw(std::ostream *stream,
+         const T &val)
+{
+  stream->write(reinterpret_cast<const char*>(&val), sizeof(val));
+}
+
 // Liberty stores numeric index/value sequences as quoted, comma separated
 // strings.  Recognize those so they can be stored as native floats.
 bool
@@ -82,36 +93,31 @@ writeLibertyBinary(const char *in_filename,
     // Write Magic and Version.
     out_stream.write(LIBERTY_BINARY_MAGIC, 8);
     uint32_t version = 1;
-    out_stream.write(reinterpret_cast<const char*>(&version), sizeof(version));
+    writeRaw(&out_stream, version);
     uint64_t string_table_offset = 0;
     uint64_t string_table_offset_location = out_stream.tellp();
-    out_stream.write(reinterpret_cast<const char*>(&string_table_offset),
-                     sizeof(string_table_offset));
+    writeRaw(&out_stream, string_table_offset);
 
     parseLibertyFile(in_filename, &writer, report);
 
     // Write EOF tag.
     uint8_t eof_tag = static_cast<uint8_t>(LibertyBinaryTag::EOF_TAG);
-    out_stream.write(reinterpret_cast<const char*>(&eof_tag), sizeof(eof_tag));
+    writeRaw(&out_stream, eof_tag);
 
     // Backpatch the string table offset.
     string_table_offset = out_stream.tellp();
     out_stream.seekp(string_table_offset_location, out_stream.beg);
-    out_stream.write(reinterpret_cast<const char*>(&string_table_offset),
-                     sizeof(string_table_offset));
+    writeRaw(&out_stream, string_table_offset);
 
     // Write the string table at the end of the file.
     out_stream.seekp(0, out_stream.end);
     uint32_t string_table_size = writer.string_table().size();
-    out_stream.write(reinterpret_cast<const char*>(&string_table_size),
-                     sizeof(string_table_size));
+    writeRaw(&out_stream, string_table_size);
     for (const auto &entry : writer.string_table()) {
       uint32_t string_length = entry.first.size();
-      out_stream.write(reinterpret_cast<const char*>(&string_length),
-                       sizeof(string_length));
+      writeRaw(&out_stream, string_length);
       out_stream.write(entry.first.c_str(), entry.first.size());
-      out_stream.write(reinterpret_cast<const char*>(&entry.second),
-                       sizeof(entry.second));
+      writeRaw(&out_stream, entry.second);
     }
 
     // A failed write (e.g. disk full) silently poisons the stream, so check
@@ -146,7 +152,7 @@ LibertyBinaryWriter::begin(const LibertyGroup *group,
 
   const LibertyAttrValueSeq &params = group->params();
   uint32_t param_count = params.size();
-  stream_->write(reinterpret_cast<const char*>(&param_count), sizeof(param_count));
+  writeRaw(stream_, param_count);
   for (const LibertyAttrValue *val : params)
     writeValue(val);
 }
@@ -177,7 +183,7 @@ LibertyBinaryWriter::visitAttr(const LibertySimpleAttr *attr)
   writeTag(static_cast<uint8_t>(LibertyBinaryTag::ATTR_SIMPLE));
   writeString(attr->name());
   uint32_t count = 1;
-  stream_->write(reinterpret_cast<const char*>(&count), sizeof(count));
+  writeRaw(stream_, count);
   writeValue(&attr->value());
 }
 
@@ -189,7 +195,7 @@ LibertyBinaryWriter::visitAttr(const LibertyComplexAttr *attr)
 
   const LibertyAttrValueSeq &values = attr->values();
   uint32_t count = values.size();
-  stream_->write(reinterpret_cast<const char*>(&count), sizeof(count));
+  writeRaw(stream_, count);
   bool float_seq_attr = isFloatSeqAttr(attr->name());
   std::vector<float> float_values;
   for (const LibertyAttrValue *val : values) {
@@ -217,50 +223,33 @@ LibertyBinaryWriter::visitVariable(LibertyVariable *variable)
 void
 LibertyBinaryWriter::writeTag(uint8_t tag)
 {
-  stream_->write(reinterpret_cast<const char*>(&tag), sizeof(tag));
+  writeRaw(stream_, tag);
 }
 
 void
 LibertyBinaryWriter::writeString(std::string_view str)
 {
   uint8_t type = static_cast<uint8_t>(LibertyBinaryValueType::STRING);
-  stream_->write(reinterpret_cast<const char*>(&type), sizeof(type));
+  writeRaw(stream_, type);
 
-  std::string key(str);
-  auto it = string_table_.find(key);
+  // Heterogeneous find so table hits (the common case) don't allocate a key.
+  auto it = string_table_.find(str);
   uint32_t offset;
   if (it != string_table_.end())
     offset = it->second;
   else {
     offset = string_table_.size();
-    string_table_[key] = offset;
+    string_table_.emplace(std::string(str), offset);
   }
-  stream_->write(reinterpret_cast<const char*>(&offset), sizeof(offset));
+  writeRaw(stream_, offset);
 }
 
 void
 LibertyBinaryWriter::writeFloat(float val)
 {
   uint8_t type = static_cast<uint8_t>(LibertyBinaryValueType::FLOAT);
-  stream_->write(reinterpret_cast<const char*>(&type), sizeof(type));
-  stream_->write(reinterpret_cast<const char*>(&val), sizeof(val));
-}
-
-void
-LibertyBinaryWriter::writeInt(int val)
-{
-  uint8_t type = static_cast<uint8_t>(LibertyBinaryValueType::INT);
-  stream_->write(reinterpret_cast<const char*>(&type), sizeof(type));
-  stream_->write(reinterpret_cast<const char*>(&val), sizeof(val));
-}
-
-void
-LibertyBinaryWriter::writeBool(bool val)
-{
-  uint8_t type = static_cast<uint8_t>(LibertyBinaryValueType::BOOLEAN);
-  stream_->write(reinterpret_cast<const char*>(&type), sizeof(type));
-  uint8_t v = val ? 1 : 0;
-  stream_->write(reinterpret_cast<const char*>(&v), sizeof(v));
+  writeRaw(stream_, type);
+  writeRaw(stream_, val);
 }
 
 void
@@ -283,9 +272,9 @@ void
 LibertyBinaryWriter::writeFloatSeq(const std::vector<float> &floats)
 {
   uint8_t type = static_cast<uint8_t>(LibertyBinaryValueType::FLOAT_SEQ);
-  stream_->write(reinterpret_cast<const char*>(&type), sizeof(type));
+  writeRaw(stream_, type);
   uint32_t count = floats.size();
-  stream_->write(reinterpret_cast<const char*>(&count), sizeof(count));
+  writeRaw(stream_, count);
   if (count > 0)
     stream_->write(reinterpret_cast<const char*>(floats.data()),
                    count * sizeof(float));

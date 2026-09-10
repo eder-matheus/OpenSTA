@@ -3387,10 +3387,11 @@ LibertyReader::readFloatSeq(const LibertyComplexAttr *attr,
   else if (attr_values.size() > 1) {
     for (LibertyAttrValue *value : attr_values) {
       if (value->isFloatSeq()) {
-        FloatSeq parsed;
-        value->fillFloatSeq(&parsed);
-        scaleFloats(parsed, scale);
-        values.insert(values.end(), parsed.begin(), parsed.end());
+        // fillFloatSeq appends, so scale just the appended range.
+        size_t first = values.size();
+        value->fillFloatSeq(&values);
+        for (size_t i = first; i < values.size(); i++)
+          values[i] *= scale;
       }
       else if (value->isString()) {
         FloatSeq parsed = parseFloatList(value->stringValue(), scale, attr->line());
