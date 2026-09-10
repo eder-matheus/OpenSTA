@@ -25,6 +25,7 @@
 %{
 
 #include "Property.hh"
+#include "Report.hh"
 #include "Sta.hh"
 
 using namespace sta;
@@ -135,6 +136,79 @@ mode_property(Mode *mode,
 {
   Properties &properties = Sta::sta()->properties();
   return properties.getProperty(mode, property);
+}
+
+void
+define_property_cmd(const char *object_type,
+                    const char *property,
+                    const char *type)
+{
+  Properties &properties = Sta::sta()->properties();
+  std::string_view object_type_view(object_type);
+  if (object_type_view == "scene")
+    properties.defineProperty<Scene>(object_type, property, type);
+  else if (object_type_view == "mode")
+    properties.defineProperty<Mode>(object_type, property, type);
+  else if (object_type_view == "library")
+    properties.defineProperty<Library>(object_type, property, type);
+  else if (object_type_view == "liberty_library")
+    properties.defineProperty<LibertyLibrary>(object_type, property, type);
+  else if (object_type_view == "cell")
+    properties.defineProperty<Cell>(object_type, property, type);
+  else if (object_type_view == "liberty_cell")
+    properties.defineProperty<LibertyCell>(object_type, property, type);
+  else if (object_type_view == "port")
+    properties.defineProperty<Port>(object_type, property, type);
+  else if (object_type_view == "liberty_port")
+    properties.defineProperty<LibertyPort>(object_type, property, type);
+  else if (object_type_view == "instance")
+    properties.defineProperty<Instance>(object_type, property, type);
+  else if (object_type_view == "pin")
+    properties.defineProperty<Pin>(object_type, property, type);
+  else if (object_type_view == "net")
+    properties.defineProperty<Net>(object_type, property, type);
+  else if (object_type_view == "clock")
+    properties.defineProperty<Clock>(object_type, property, type);
+  else
+    Sta::sta()->report()->error(2209, "define_property -object_type {} not supported.",
+                                object_type);
+}
+
+void
+set_property_cmd(void *object,
+                 const char *object_type,
+                 const char *property,
+                 const char *value)
+{
+  Properties &properties = Sta::sta()->properties();
+  std::string_view object_type_view(object_type);
+  if (object_type_view == "Scene")
+    properties.setProperty(object, "scene", property, value);
+  else if (object_type_view == "Mode")
+    properties.setProperty(object, "mode", property, value);
+  else if (object_type_view == "Library")
+    properties.setProperty(object, "library", property, value);
+  else if (object_type_view == "LibertyLibrary")
+    properties.setProperty(object, "liberty_library", property, value);
+  else if (object_type_view == "Cell")
+    properties.setProperty(object, "cell", property, value);
+  else if (object_type_view == "LibertyCell")
+    properties.setProperty(object, "liberty_cell", property, value);
+  else if (object_type_view == "Port")
+    properties.setProperty(object, "port", property, value);
+  else if (object_type_view == "LibertyPort")
+    properties.setProperty(object, "liberty_port", property, value);
+  else if (object_type_view == "Instance")
+    properties.setProperty(object, "instance", property, value);
+  else if (object_type_view == "Pin")
+    properties.setProperty(object, "pin", property, value);
+  else if (object_type_view == "Net")
+    properties.setProperty(object, "net", property, value);
+  else if (object_type_view == "Clock")
+    properties.setProperty(object, "clock", property, value);
+  else
+    Sta::sta()->report()->error(2214, "set_property unsupported object type {}.",
+                                object_type);
 }
 
 PropertyValue

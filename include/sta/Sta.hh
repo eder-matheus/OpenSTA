@@ -346,6 +346,13 @@ public:
                       Sdc *sdc);
   void setMaxArea(float area,
                   Sdc *sdc);
+  float maxArea(const Sdc *sdc) const;
+  void setMaxDynamicPower(float power,
+                          Sdc *sdc);
+  float maxDynamicPower(const Sdc *sdc) const;
+  void setMaxLeakagePower(float power,
+                          Sdc *sdc);
+  float maxLeakagePower(const Sdc *sdc) const;
 
   void makeClock(std::string_view name,
                  const PinSet &pins,
@@ -647,6 +654,13 @@ public:
                      float delay,
                      std::string_view comment,
                      Sdc *sdc);
+  void makePathMargin(ExceptionFrom *from,
+                      ExceptionThruSeq *thrus,
+                      ExceptionTo *to,
+                      const MinMaxAll *min_max,
+                      float margin,
+                      std::string_view comment,
+                      Sdc *sdc);
   void makeGroupPath(std::string_view name,
                      bool is_default,
                      ExceptionFrom *from,
@@ -947,6 +961,11 @@ public:
   // from/thrus/to are owned and deleted by Search.
   // PathEnds in the returned PathEndSeq are owned by Search PathGroups
   // and deleted on next call.
+  //
+  // IMPORTANT: THIS IS NOT THE DROID YOU ARE LOOKING FOR.
+  // This function is specifically designed to support the many options
+  // and results of timing reports. It is NOT a good option to find paths
+  // for optimization.
   PathEndSeq findPathEnds(ExceptionFrom *from,
                           ExceptionThruSeq *thrus,
                           ExceptionTo *to,
@@ -1003,6 +1022,8 @@ public:
   void reportPathEnds(PathEndSeq *ends);
   ReportPath *reportPath() { return report_path_; }
   void reportPath(const Path *path);
+  // For debugging.
+  void reportPathVerbose(const Path *path);
 
   // Report clk skews for clks.
   void reportClkSkew(ConstClockSeq &clks,
@@ -1112,6 +1133,11 @@ public:
                   const MinMax *min_max);
   Arrival arrival(Vertex *vertex,
                   const RiseFallBoth *rf,
+                  const SceneSeq &scenes,
+                  const MinMax *min_max);
+  Arrival arrival(Vertex *vertex,
+                  const RiseFall *rf,
+                  const ClockEdge *clk_edge,
                   const SceneSeq &scenes,
                   const MinMax *min_max);
 

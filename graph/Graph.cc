@@ -418,6 +418,8 @@ Graph::makePinVertices(Pin *pin,
                        Vertex *&vertex,
                        Vertex *&bidir_drvr_vertex)
 {
+  vertex = nullptr;
+  bidir_drvr_vertex = nullptr;
   PortDirection *dir = network_->direction(pin);
   if (!dir->isPowerGround()) {
     bool is_reg_clk = network_->isRegClkPin(pin);
@@ -427,8 +429,6 @@ Graph::makePinVertices(Pin *pin,
       bidir_drvr_vertex = makeVertex(pin, true, is_reg_clk);
       pin_bidirect_drvr_vertex_map_[pin] = bidir_drvr_vertex;
     }
-    else
-      bidir_drvr_vertex = nullptr;
   }
 }
 
@@ -581,9 +581,9 @@ Graph::visitFanouts(Vertex *vertex,
                     const VertexFn &fn)
 {
   if (pred->searchFrom(vertex)) {
-    for (Edge *edge = this->edge(vertex->out_edges_);
-         edge;
-         edge = this->edge(edge->vertex_out_next_)) {
+    VertexOutEdgeIterator edge_iter(vertex, graph_);
+    while (edge_iter.hasNext()) {
+      Edge *edge = edge_iter.next();
       Vertex *to_vertex = this->vertex(edge->to_);
       if (pred->searchThru(edge)
           && pred->searchTo(to_vertex))
@@ -598,9 +598,9 @@ Graph::visitFanoutEdges(Vertex *vertex,
                         const EdgeFn &fn)
 {
   if (pred->searchFrom(vertex)) {
-    for (Edge *edge = this->edge(vertex->out_edges_);
-         edge;
-         edge = this->edge(edge->vertex_out_next_)) {
+    VertexOutEdgeIterator edge_iter(vertex, graph_);
+    while (edge_iter.hasNext()) {
+      Edge *edge = edge_iter.next();
       Vertex *to_vertex = this->vertex(edge->to_);
       if (pred->searchThru(edge)
           && pred->searchTo(to_vertex))
@@ -615,9 +615,9 @@ Graph::visitFanins(Vertex *vertex,
                    const VertexFn &fn)
 {
   if (pred->searchFrom(vertex)) {
-    for (Edge *edge = this->edge(vertex->in_edges_);
-         edge;
-         edge = this->edge(edge->vertex_in_next_)) {
+    VertexInEdgeIterator edge_iter(vertex, graph_);
+    while (edge_iter.hasNext()) {
+      Edge *edge = edge_iter.next();
       Vertex *from_vertex = this->vertex(edge->from_);
       if (pred->searchThru(edge)
           && pred->searchFrom(from_vertex))
@@ -632,9 +632,9 @@ Graph::visitFaninEdges(Vertex *vertex,
                        const EdgeFn &fn)
 {
   if (pred->searchFrom(vertex)) {
-    for (Edge *edge = this->edge(vertex->in_edges_);
-         edge;
-         edge = this->edge(edge->vertex_in_next_)) {
+    VertexInEdgeIterator edge_iter(vertex, graph_);
+    while (edge_iter.hasNext()) {
+      Edge *edge = edge_iter.next();
       Vertex *from_vertex = this->vertex(edge->from_);
       if (pred->searchThru(edge)
           && pred->searchFrom(from_vertex))
@@ -1045,7 +1045,6 @@ Vertex::init(Pin *pin,
   slews_ = nullptr;
   paths_ = nullptr;
   tag_group_index_ = tag_group_index_max;
-  bfs_in_queue_ = 0;
   is_bidirect_drvr_ = is_bidirect_drvr;
   is_reg_clk_ = is_reg_clk;
   has_checks_ = false;
@@ -1056,6 +1055,8 @@ Vertex::init(Pin *pin,
   has_sim_value_ = false;
   level_ = 0;
   slew_annotated_ = false;
+  bfs_in_queue_ = 0;
+  bfs_predecessor_changed_ = false;
 }
 
 Vertex::~Vertex()
@@ -1112,6 +1113,23 @@ Vertex::isDriver(const Network *network) const
                   || dir->isTristate()
                   || (dir->isBidirect()
                       && is_bidirect_drvr_)
+                  || dir->isInternal())));
+}
+
+bool
+Vertex::isLoad(const Network *network) const
+{
+  PortDirection *dir = network->direction(pin_);
+  bool top_level_port = network->isTopLevelPort(pin_);
+  return ((top_level_port
+           && (dir->isOutput()
+               || (dir->isBidirect()
+                   && !is_bidirect_drvr_)))
+          || (!top_level_port
+              && (dir->isInput()
+                  || dir->isTristate()
+                  || (dir->isBidirect()
+                      && !is_bidirect_drvr_)
                   || dir->isInternal())));
 }
 
@@ -1262,6 +1280,12 @@ Vertex::setBfsInQueue(BfsIndex index,
     bfs_in_queue_ |= 1 << static_cast<unsigned>(index);
   else
     bfs_in_queue_ &= ~(1 << static_cast<unsigned>(index));
+}
+
+void
+Vertex::setBfsPredecessorChanged(bool changed)
+{
+  bfs_predecessor_changed_ = changed;
 }
 
 ////////////////////////////////////////////////////////////////

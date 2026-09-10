@@ -42,6 +42,7 @@
 #include "GraphCmp.hh"
 #include "Liberty.hh"
 #include "LibertyClass.hh"
+#include "Mode.hh"
 #include "Network.hh"
 #include "NetworkClass.hh"
 #include "PathEnd.hh"
@@ -310,8 +311,7 @@ filterObjects(std::string_view filter_expression,
     std::set<T*> all;
     for (auto object: *objects)
       all.insert(object);
-    // Delete objects before parsing so errors to not leak them.
-    delete objects;
+    // SWIG %typemap(freearg) owns the container. Do not delete it here.
 
     FilterExpr filter(filter_expression, report);
     auto postfix = filter.postfix();
@@ -495,6 +495,30 @@ filterClocks(std::string_view filter_expression,
                                        const Clock *clk2) {
                                      return clk1->name() < clk2->name();
                                    }, sta);
+}
+
+SceneSeq
+filterScenes(std::string_view filter_expression,
+             SceneSeq *scenes,
+             Sta *sta)
+{
+  return filterObjects<Scene>(filter_expression, scenes,
+                              [] (const Scene *scene1,
+                                  const Scene *scene2) {
+                                return scene1->name() < scene2->name();
+                              }, sta);
+}
+
+ModeSeq
+filterModes(std::string_view filter_expression,
+            ModeSeq *modes,
+            Sta *sta)
+{
+  return filterObjects<Mode>(filter_expression, modes,
+                             [] (const Mode *mode1,
+                                 const Mode *mode2) {
+                               return mode1->name() < mode2->name();
+                             }, sta);
 }
 
 LibertyCellSeq

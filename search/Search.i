@@ -251,7 +251,7 @@ endpoint_slack(const Pin *pin,
   Sta *sta = Sta::sta();
   sta->ensureLibLinked();
   if (!path_group_name.empty()
-      && !sta->isGroupPathName(path_group_name, sta->cmdSdc()))  {
+      && !sta->isPathGroupName(path_group_name, sta->cmdSdc()))  {
     sta->report()->error(1590, "{} is not a known path group name.",
                          path_group_name);
     return INF;
@@ -494,7 +494,6 @@ void
 report_path_ends(PathEndSeq *ends)
 {
   Sta::sta()->reportPathEnds(ends);
-  delete ends;
 }
 
 ////////////////////////////////////////////////////////////////
@@ -908,7 +907,6 @@ find_fanin_pins(PinSeq *to,
   PinSet fanin = sta->findFaninPins(to, flat, startpoints_only,
                                     inst_levels, pin_levels,
                                     thru_disabled, thru_constants, mode);
-  delete to;
   return fanin;
 }
 
@@ -926,7 +924,6 @@ find_fanin_insts(PinSeq *to,
   InstanceSet fanin = sta->findFaninInstances(to, flat, startpoints_only,
                                               inst_levels, pin_levels,
                                               thru_disabled, thru_constants, mode);
-  delete to;
   return fanin;
 }
 
@@ -944,7 +941,6 @@ find_fanout_pins(PinSeq *from,
   PinSet fanout = sta->findFanoutPins(from, flat, endpoints_only,
                                       inst_levels, pin_levels,
                                       thru_disabled, thru_constants, mode);
-  delete from;
   return fanout;
 }
 
@@ -962,7 +958,6 @@ find_fanout_insts(PinSeq *from,
   InstanceSet fanout = sta->findFanoutInstances(from, flat, endpoints_only,
                                                 inst_levels, pin_levels,
                                                 thru_disabled, thru_constants, mode);
-  delete from;
   return fanout;
 }
 
@@ -1129,6 +1124,32 @@ void
 set_use_default_arrival_clock(bool enable)
 {
   Sta::sta()->setUseDefaultArrivalClock(enable);
+}
+
+// For regression tests.
+void
+report_arrival_entries()
+{
+  Sta *sta = Sta::sta();
+  Search *search = sta->search();
+  search->arrivalIterator()->reportEntries();
+}
+
+// For regression tests.
+void
+report_required_entries()
+{
+  Sta *sta = Sta::sta();
+  Search *search = sta->search();
+  search->requiredIterator()->reportEntries();
+}
+
+// For regression tests.
+void
+levelize()
+{
+  Sta *sta = Sta::sta();
+  sta->levelize()->findLevels();
 }
 
 %} // inline

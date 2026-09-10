@@ -428,23 +428,21 @@ set(CMAKE_REQUIRED_FLAGS "${_sta_fmt_check_saved_flags}")
 if(HAVE_CXX_STD_FORMAT)
   message(STATUS "std::format: available")
 else()
-  # Set the fmt dir for the ubuntu/centos docker files.
-  if(EXISTS "/usr/local/lib/cmake/fmt/fmt-config.cmake")
-    set(fmt_DIR "/usr/local/lib/cmake/fmt")
-  elseif(EXISTS "/usr/lib/x86_64-linux-gnu/cmake/fmt/fmt-config.cmake")
-    set(fmt_DIR "/usr/lib/x86_64-linux-gnu/cmake/fmt")
-  elseif(EXISTS "/usr/lib/aarch64-linux-gnu/cmake/fmt/fmt-config.cmake")
-    set(fmt_DIR "/usr/lib/aarch64-linux-gnu/cmake/fmt")
-  endif()
-  find_package(fmt QUIET)
-  if(fmt_FOUND)
-    message(STATUS "std::format: using installed fmt library")
+  # Use spdlog's bundled fmt when available to avoid ODR violations.
+  find_package(spdlog QUIET)
+  if(spdlog_FOUND)
+    message(STATUS "std::format: using spdlog's bundled fmt")
+    set(STA_USE_SPDLOG_FMT TRUE)
+    get_target_property(_spdlog_inc spdlog::spdlog INTERFACE_INCLUDE_DIRECTORIES)
+    set(_fmt_dir "${CMAKE_CURRENT_BINARY_DIR}/_spdlog_fmt")
+    file(MAKE_DIRECTORY "${_fmt_dir}")
+    file(CREATE_LINK "${_spdlog_inc}/spdlog/fmt/bundled" "${_fmt_dir}/fmt" SYMBOLIC)
   else()
     message(STATUS "std::format: building fmt library")
     include(FetchContent)
     FetchContent_Declare(fmt
       GIT_REPOSITORY https://github.com/fmtlib/fmt.git
-      GIT_TAG 10.2.1
+      GIT_TAG 11.0.2
     )
     FetchContent_MakeAvailable(fmt)
   endif()
@@ -573,7 +571,12 @@ target_link_libraries(OpenSTA
   )
 
 if(NOT HAVE_CXX_STD_FORMAT)
-  target_link_libraries(OpenSTA fmt::fmt)
+  if(STA_USE_SPDLOG_FMT)
+    target_include_directories(OpenSTA PUBLIC "${_fmt_dir}")
+    target_link_libraries(OpenSTA spdlog::spdlog)
+  else()
+    target_link_libraries(OpenSTA fmt::fmt)
+  endif()
 endif()
 
 if (ZLIB_LIBRARIES)
@@ -684,6 +687,54 @@ add_custom_target(sta_tags
 add_custom_command(
   TARGET OpenSTA
   POST_BUILD
-  COMMAND ${STA_HOME}/etc/FindMessages.tcl > ${STA_HOME}/doc/messages.txt || true
+  COMMAND ${STA_HOME}/etc/FindMessages.tcl ${STA_HOME}/doc/Messages.md
   WORKING_DIRECTORY ${STA_HOME}
 )
+
+add_custom_command(
+  TARGET sta
+  POST_BUILD
+  COMMAND $<TARGET_FILE:sta> -no_splash -no_init -exit ${STA_HOME}/etc/WriteCmdDocs.tcl
+  WORKING_DIRECTORY ${STA_HOME}
+)
+
+################################################################
+# Tests
+################################################################
+
+option(BUILD_TESTS "Build unit tests" ON)
+if(BUILD_TESTS)
+  enable_testing()
+  find_package(GTest REQUIRED)
+  include(GoogleTest)
+
+  # Helper: register a list of Tcl tests for a module.
+  # Usage:
+  #   sta_module_tests("search" TESTS timing analysis ...)
+  function(sta_module_tests module_name)
+    cmake_parse_arguments(ARG "" "" "TESTS" ${ARGN})
+    foreach(test_name ${ARG_TESTS})
+      add_test(
+        NAME tcl.${module_name}.${test_name}
+        COMMAND bash ${STA_HOME}/test/regression.sh $<TARGET_FILE:sta> ${module_name}_${test_name}
+        WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+      )
+      set_tests_properties(tcl.${module_name}.${test_name} PROPERTIES LABELS "tcl;module_${module_name}")
+    endforeach()
+  endfunction()
+
+  add_subdirectory(test)
+  # Per-module tests
+  add_subdirectory(util/test)
+  add_subdirectory(liberty/test)
+  add_subdirectory(graph/test)
+  add_subdirectory(network/test)
+  add_subdirectory(sdc/test)
+  add_subdirectory(sdf/test)
+  add_subdirectory(dcalc/test)
+  add_subdirectory(search/test)
+  add_subdirectory(parasitics/test)
+  add_subdirectory(power/test)
+  add_subdirectory(verilog/test)
+  add_subdirectory(spice/test)
+endif()

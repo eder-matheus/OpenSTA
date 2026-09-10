@@ -1492,6 +1492,11 @@ LibertyCell::addScaledCell(OperatingConditions *op_cond,
         TimingModel *model = scaled_arc->model();
         model->setIsScaled(true);
         arc->addScaledModel(op_cond, model);
+        TimingModel *retain_model = scaled_arc->retainModel();
+        if (retain_model) {
+          retain_model->setIsScaled(true);
+          arc->addScaledRetainModel(op_cond, retain_model);
+        }
       }
     }
   }
@@ -2633,7 +2638,7 @@ LibertyPort::clkTreeDelay(float in_slew,
         || (arc_set->role() == TimingRole::clockTreePathMax()
             && min_max == MinMax::max())) {
       const TimingArc *arc = arc_set->arcTo(to_rf);
-      if (arc->fromEdge()->asRiseFall() == from_rf) {
+      if (arc && arc->fromEdge()->asRiseFall() == from_rf) {
         const GateTableModel *gate_model = dynamic_cast<GateTableModel*>(arc->model());
         if (gate_model)
           return gate_model->delayModel()->findValue(in_slew, 0.0, 0.0);

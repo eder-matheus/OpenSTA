@@ -191,6 +191,7 @@ StaSimObserver::StaSimObserver(StaState *sta) :
 void
 StaSimObserver::valueChangeAfter(const Pin *pin)
 {
+  graph_delay_calc_->delayInvalid(pin);
   Vertex *vertex = graph_->pinDrvrVertex(pin);
   if (vertex) {
     search_->arrivalInvalid(vertex);
@@ -1148,6 +1149,38 @@ Sta::setMaxArea(float area,
   sdc->setMaxArea(area);
 }
 
+float
+Sta::maxArea(const Sdc *sdc) const
+{
+  return sdc->maxArea();
+}
+
+void
+Sta::setMaxDynamicPower(float power,
+                        Sdc *sdc)
+{
+  sdc->setMaxDynamicPower(power);
+}
+
+float
+Sta::maxDynamicPower(const Sdc *sdc) const
+{
+  return sdc->maxDynamicPower();
+}
+
+void
+Sta::setMaxLeakagePower(float power,
+                        Sdc *sdc)
+{
+  sdc->setMaxLeakagePower(power);
+}
+
+float
+Sta::maxLeakagePower(const Sdc *sdc) const
+{
+  return sdc->maxLeakagePower();
+}
+
 void
 Sta::makeClock(std::string_view name,
                const PinSet &pins,
@@ -1729,8 +1762,9 @@ Sta::isDisabledConstraint(Edge *edge,
 {
   Pin *from_pin = edge->from(graph_)->pin();
   Pin *to_pin = edge->to(graph_)->pin();
-  return sdc->isDisabledConstraint(from_pin) || sdc->isDisabledConstraint(to_pin)
-      || sdc->isDisabledConstraint(edge);
+  return sdc->isDisabledConstraint(from_pin)
+    || sdc->isDisabledConstraint(to_pin)
+    || sdc->isDisabledConstraint(edge);
 }
 
 bool
@@ -2034,6 +2068,19 @@ Sta::makePathDelay(ExceptionFrom *from,
   sdc->makePathDelay(from, thrus, to, min_max, ignore_clk_latency, break_path, delay,
                      comment);
   search_->endpointsInvalid();
+  search_->arrivalsInvalid();
+}
+
+void
+Sta::makePathMargin(ExceptionFrom *from,
+                    ExceptionThruSeq *thrus,
+                    ExceptionTo *to,
+                    const MinMaxAll *min_max,
+                    float margin,
+                    std::string_view comment,
+                    Sdc *sdc)
+{
+  sdc->makePathMargin(from, thrus, to, min_max, margin, comment);
   search_->arrivalsInvalid();
 }
 
@@ -2686,8 +2733,11 @@ Sta::updateSceneLiberty(Scene *scene,
     LibertyLibrary *lib = network_->findLiberty(lib_file);
     if (lib == nullptr)
       lib = network_->findLibertyFilename(lib_file);
-    if (lib)
+    if (lib) {
       LibertyLibrary::makeSceneMap(lib, scene, min_max, network_, report_);
+      for (const MinMax *min_max : min_max->range())
+        scene->addLiberty(lib, min_max);
+    }
     else
       report_->warn(1555, "liberty name/filename {} not found.", lib_file);
   }
@@ -2859,6 +2909,14 @@ Sta::reportPathEnds(PathEndSeq *ends)
 void
 Sta::reportPath(const Path *path)
 {
+  report_path_->reportPath(path);
+}
+
+void
+Sta::reportPathVerbose(const Path *path)
+{
+  const StringSeq field_names = {"input_pins", "slew", "capacitance"};
+  setReportPathFields(field_names);
   report_path_->reportPath(path);
 }
 
@@ -3111,6 +3169,31 @@ Sta::arrival(Vertex *vertex,
         && (rf == RiseFallBoth::riseFall()
             || path->transition(this)->asRiseFallBoth() == rf)
         && path->minMax(this) == min_max && scenes_set.contains(path->scene(this))
+        && delayGreater(path->arrival(), arrival, min_max, this))
+      arrival = path_arrival;
+  }
+  return arrival;
+}
+
+Arrival
+Sta::arrival(Vertex *vertex,
+             const RiseFall *rf,
+             const ClockEdge *clk_edge,
+             const SceneSeq &scenes,
+             const MinMax *min_max)
+{
+  searchPreamble();
+  search_->findArrivals(vertex->level());
+  const SceneSet scenes_set = Scene::sceneSet(scenes);
+  Arrival arrival = min_max->initValue();
+  VertexPathIterator path_iter(vertex, rf, min_max, this);
+  while (path_iter.hasNext()) {
+    Path *path = path_iter.next();
+    const Arrival &path_arrival = path->arrival();
+    const ClkInfo *clk_info = path->clkInfo(search_);
+    if (clk_info->clkEdge() == clk_edge
+        && !clk_info->isGenClkSrcPath()
+        && scenes_set.contains(path->scene(this))
         && delayGreater(path->arrival(), arrival, min_max, this))
       arrival = path_arrival;
   }
@@ -3622,8 +3705,10 @@ void
 Sta::delayCalcPreamble()
 {
   ensureLevelized();
-  for (Mode *mode : modes_)
+  for (Mode *mode : modes_) {
+    mode->sim()->ensureConstantsPropagated();
     mode->clkNetwork()->ensureClkNetwork();
+  }
 }
 
 void
@@ -4493,6 +4578,10 @@ Sta::makeInstanceAfter(const Instance *inst)
         if (pin) {
           Vertex *vertex, *bidir_drvr_vertex;
           graph_->makePinVertices(pin, vertex, bidir_drvr_vertex);
+          if (vertex)
+            search_->endpointInvalid(vertex);
+          if (bidir_drvr_vertex)
+            search_->endpointInvalid(bidir_drvr_vertex);
         }
       }
       graph_->makeInstanceEdges(inst);
@@ -4528,16 +4617,14 @@ Sta::replaceEquivCellBefore(const Instance *inst,
           VertexOutEdgeIterator edge_iter(vertex, graph_);
           while (edge_iter.hasNext()) {
             Edge *edge = edge_iter.next();
-            Vertex *to_vertex = edge->to(graph_);
-            if (network_->instance(to_vertex->pin()) == inst) {
+            if (!edge->isWire()) {
               TimingArcSet *from_set = edge->timingArcSet();
               // Find corresponding timing arc set.
               TimingArcSet *to_set = to_cell->findTimingArcSet(from_set);
               if (to_set)
                 edge->setTimingArcSet(to_set);
               else
-                report_->critical(
-                    1556, "corresponding timing arc set not found in equiv cells");
+                report_->critical(1563, "corresponding timing arc set not found in equiv cells");
             }
           }
         }
@@ -4633,8 +4720,7 @@ Sta::replaceCellBefore(const Instance *inst,
         VertexOutEdgeIterator edge_iter(vertex, graph_);
         while (edge_iter.hasNext()) {
           Edge *edge = edge_iter.next();
-          Vertex *to_vertex = edge->to(graph_);
-          if (network_->instance(to_vertex->pin()) == inst)
+          if (!edge->isWire())
             deleteEdge(edge);
         }
       }
