@@ -82,7 +82,7 @@ public:
   LibertyGroup *group();
   void deleteGroups();
   LibertySimpleAttr *makeSimpleAttr(std::string &&name,
-                                    const LibertyAttrValue *value,
+                                    LibertyAttrValue *value,
                                     int line);
   LibertyComplexAttr *makeComplexAttr(std::string &&name,
                                      const LibertyAttrValueSeq *values,

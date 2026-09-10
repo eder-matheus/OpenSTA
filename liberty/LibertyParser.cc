@@ -179,10 +179,11 @@ LibertyParser::deleteGroups()
 
 LibertySimpleAttr *
 LibertyParser::makeSimpleAttr(std::string &&name,
-                              const LibertyAttrValue *value,
+                              LibertyAttrValue *value,
                               int line)
 {
-  LibertySimpleAttr *attr = new LibertySimpleAttr(std::move(name), *value, line);
+  LibertySimpleAttr *attr = new LibertySimpleAttr(std::move(name),
+                                                  std::move(*value), line);
   delete value;
   LibertyGroup *group = this->group();
   group->addAttr(attr);
